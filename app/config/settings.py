@@ -64,6 +64,9 @@ class Settings:
     daily_loss_limit_pct: float = 0.03
     max_open_positions: int = 10
 
+    # Simulated trading costs
+    commission_per_trade: float = 0.0
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path.as_posix()}"
@@ -104,4 +107,5 @@ def get_settings() -> Settings:
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "0.10")),
         daily_loss_limit_pct=float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.03")),
         max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "10")),
+        commission_per_trade=float(os.getenv("COMMISSION_PER_TRADE", "0.0")),
     )

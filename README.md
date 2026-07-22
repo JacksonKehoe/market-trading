@@ -11,7 +11,7 @@ strategies with virtual money before any real capital is ever risked.
 
 ## Status
 
-Phase 1 — architecture and project skeleton. See [Development Phases](#development-phases).
+Phase 2 — paper trading engine. See [Development Phases](#development-phases).
 
 ## Quickstart
 
@@ -55,10 +55,10 @@ scheduler                     (top-level orchestration; wires everything togethe
 | `app/data` | `MarketDataProvider` interface plus (Phase 3) a `yfinance`-backed implementation and a local cache, so strategies never call a data vendor directly. | `models` |
 | `app/indicators` | Pure functions (SMA/EMA, RSI, MACD) operating on `pandas` Series — no classes, no state. | nothing |
 | `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD). Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators` |
-| `app/portfolio` | (Phase 2) In-memory portfolio state: cash, positions, realized/unrealized P/L. No DB access — persistence is a separate concern. | `models` |
-| `app/risk` | `RiskLimits` (config) now; `RiskManager` (Phase 2) evaluates proposed orders against those limits before they reach a broker. | `models`, `config` |
-| `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` (Phase 2) is the only implementation for now: an in-memory simulator, no network, no credentials. An `ExecutionEngine` (Phase 2) will chain strategy → risk check → broker. | `models`, `risk`, `portfolio` |
-| `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`) now; ORM models and repositories arrive in Phase 2 to persist trades/positions/snapshots, translating to/from `app/models/domain.py`. | `models`, `config` |
+| `app/portfolio` | `Portfolio` — the in-memory ledger `PaperBroker` uses to simulate an account: applies fills, tracks cash/positions/realized P/L, computes equity and unrealized P/L against a price map. No DB access — persistence is a separate concern. | `models` |
+| `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
+| `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
+| `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord`); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
 | `app/reporting` | (later phase) Performance analytics (Sharpe, drawdown, CAGR, win rate, ...), backtesting, and Plotly chart generation. | `models`, `database` |
 | `app/email` | (later phase) Jinja2 HTML report templates + SMTP sending, entirely optional (disabled unless `EMAIL_*` env vars are set). | `reporting` |
 | `app/scheduler` | (later phase) APScheduler jobs (morning/evening/hourly) that orchestrate data refresh → strategy scan → risk-checked paper trades → report generation → optional email. | everything above |
@@ -82,9 +82,26 @@ scheduler                     (top-level orchestration; wires everything togethe
   function/class accepts a `Settings` instance so tests can construct one
   directly with custom values — no environment-variable monkeypatching.
 - **Risk enforcement is a separate module from execution.** `RiskLimits`
-  is config; the forthcoming `RiskManager` evaluates orders against it.
-  Splitting them lets risk rules be unit-tested against fabricated
-  portfolios without a broker in the loop.
+  is config; `RiskManager` evaluates orders against it. Splitting them
+  lets risk rules be unit-tested against fabricated `Account`/`Position`
+  data without a broker in the loop.
+- **`RiskManager` depends on `Account`/`Position` data, not on `Portfolio`
+  or `BrokerInterface` directly.** `ExecutionEngine` pulls that data out
+  of `broker.get_account()`/`get_positions()` and passes it in. This
+  avoids a circular dependency between `risk` and `execution`, and means
+  the exact same risk logic runs against `PaperBroker` today or a live
+  broker later without modification.
+- **Persistence is a `Protocol`, not a concrete import.** `ExecutionEngine`
+  depends on `execution.TradeRepository` (a structural `Protocol`
+  defined in the execution layer, its consumer). `database.SqlTradeRepository`
+  satisfies it by matching method signatures — no inheritance, and
+  `ExecutionEngine` never imports SQLAlchemy. Passing `repository=None`
+  runs the engine in memory only (useful for tests/backtesting).
+- **`PaperBroker` fills orders immediately at the data provider's last
+  price with no slippage model.** That's a deliberate simplification for
+  this version — it keeps fills deterministic and easy to test. A
+  slippage/latency model could be added inside `PaperBroker.submit_order`
+  later without changing `BrokerInterface` or anything above it.
 
 ## Project layout
 
@@ -96,10 +113,12 @@ app/
 ├── data/         base.py                — MarketDataProvider interface
 ├── indicators/                          — SMA/EMA/RSI/MACD (Phase 4)
 ├── strategies/   base.py                — Strategy interface
-├── portfolio/                           — portfolio state (Phase 2)
-├── risk/         rules.py               — RiskLimits config
-├── execution/    broker_base.py         — BrokerInterface + PaperBroker (Phase 2)
-├── database/     engine.py              — SQLAlchemy engine/session
+├── portfolio/    portfolio.py           — Portfolio ledger (cash/positions/P&L)
+├── risk/         rules.py, risk_manager.py — RiskLimits + RiskManager
+├── execution/    broker_base.py, paper_broker.py, engine.py, repository.py
+│                                        — BrokerInterface, PaperBroker, ExecutionEngine
+├── database/     engine.py, orm_models.py, repository.py
+│                                        — SQLAlchemy engine/session + SqlTradeRepository
 ├── reporting/                           — analytics, backtesting, charts
 ├── email/                               — Jinja2 templates + SMTP sender
 ├── scheduler/                           — APScheduler jobs
@@ -120,11 +139,11 @@ working default, so the app runs with no `.env` file at all.
 
 ## Development phases
 
-1. **Architecture & skeleton** *(this phase)* — project structure, domain
+1. **Architecture & skeleton** — project structure, domain
    models, config, logging, core interfaces (`Strategy`,
    `MarketDataProvider`, `BrokerInterface`), database bootstrap.
-2. **Paper trading engine** — `PaperBroker`, `Portfolio`, `RiskManager`,
-   `ExecutionEngine`, ORM persistence for trades/positions.
+2. **Paper trading engine** *(this phase)* — `PaperBroker`, `Portfolio`,
+   `RiskManager`, `ExecutionEngine`, ORM persistence for trades/positions.
 3. **Market data** — `yfinance` provider + on-disk cache, watchlist loading.
 4. **Strategies & indicators** — SMA/EMA/RSI/MACD, Moving Average
    Crossover / RSI / MACD strategies.
