@@ -11,7 +11,7 @@ strategies with virtual money before any real capital is ever risked.
 
 ## Status
 
-Phase 2 — paper trading engine. See [Development Phases](#development-phases).
+Phase 3 — market data. See [Development Phases](#development-phases).
 
 ## Quickstart
 
@@ -52,7 +52,7 @@ scheduler                     (top-level orchestration; wires everything togethe
 | `app/models` | Framework-free dataclasses (`Bar`, `Signal`, `Order`, `Fill`, `Position`, `Account`) and enums (`SignalType`, `OrderSide`, `OrderStatus`, `OrderType`) shared by every layer. | nothing |
 | `app/config` | Loads `.env` into a single typed, immutable `Settings` object via `get_settings()`. Every other module receives settings by argument rather than reading `os.environ` itself. | nothing |
 | `app/utils` | Cross-cutting helpers — currently `logging_config.py`, which wires up five rotating log files (`app`, `trades`, `errors`, `scheduler`, `market_data`). | nothing |
-| `app/data` | `MarketDataProvider` interface plus (Phase 3) a `yfinance`-backed implementation and a local cache, so strategies never call a data vendor directly. | `models` |
+| `app/data` | `MarketDataProvider` interface; `YFinanceProvider` (free, no API key, US equities + ETFs); `CachedMarketDataProvider`, a decorator adding an on-disk Parquet history cache and a short-TTL in-memory latest-price cache around any provider; `load_watchlist` resolves `Settings.watchlist` into a deduplicated symbol list; `build_market_data_provider` wires the concrete (cached, yfinance-backed) stack for real use. Strategies never call a data vendor directly. | `models`, `config` |
 | `app/indicators` | Pure functions (SMA/EMA, RSI, MACD) operating on `pandas` Series — no classes, no state. | nothing |
 | `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD). Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators` |
 | `app/portfolio` | `Portfolio` — the in-memory ledger `PaperBroker` uses to simulate an account: applies fills, tracks cash/positions/realized P/L, computes equity and unrealized P/L against a price map. No DB access — persistence is a separate concern. | `models` |
@@ -102,6 +102,19 @@ scheduler                     (top-level orchestration; wires everything togethe
   this version — it keeps fills deterministic and easy to test. A
   slippage/latency model could be added inside `PaperBroker.submit_order`
   later without changing `BrokerInterface` or anything above it.
+- **Caching wraps the provider rather than living inside it.**
+  `CachedMarketDataProvider(provider, cache_dir, ttl)` decorates any
+  `MarketDataProvider`, so `YFinanceProvider` stays free of caching
+  concerns and the same cache works for any future data source. Only
+  *completed* historical ranges (fully in the past) are cached to disk —
+  a range including "today" is always fetched fresh, since today's bar
+  is still forming. `yfinance` itself is injected into `YFinanceProvider`
+  (defaulting to the real package), so its tests run with zero network
+  access.
+- **`build_market_data_provider(settings)` is the one place that decides
+  the concrete data stack.** Everything above it — strategies, the
+  execution engine, the backtester — depends only on `MarketDataProvider`.
+  Swapping or adding a data vendor means changing this one function.
 
 ## Project layout
 
@@ -110,7 +123,9 @@ app/
 ├── config/       settings.py            — .env → typed Settings
 ├── models/       enums.py, domain.py    — shared dataclasses & enums
 ├── utils/        logging_config.py      — 5 rotating log files
-├── data/         base.py                — MarketDataProvider interface
+├── data/         base.py, yfinance_provider.py, cache.py, watchlist.py, factory.py
+│                                        — MarketDataProvider, YFinanceProvider,
+│                                          CachedMarketDataProvider, load_watchlist
 ├── indicators/                          — SMA/EMA/RSI/MACD (Phase 4)
 ├── strategies/   base.py                — Strategy interface
 ├── portfolio/    portfolio.py           — Portfolio ledger (cash/positions/P&L)
@@ -142,9 +157,9 @@ working default, so the app runs with no `.env` file at all.
 1. **Architecture & skeleton** — project structure, domain
    models, config, logging, core interfaces (`Strategy`,
    `MarketDataProvider`, `BrokerInterface`), database bootstrap.
-2. **Paper trading engine** *(this phase)* — `PaperBroker`, `Portfolio`,
+2. **Paper trading engine** — `PaperBroker`, `Portfolio`,
    `RiskManager`, `ExecutionEngine`, ORM persistence for trades/positions.
-3. **Market data** — `yfinance` provider + on-disk cache, watchlist loading.
+3. **Market data** *(this phase)* — `yfinance` provider + on-disk cache, watchlist loading.
 4. **Strategies & indicators** — SMA/EMA/RSI/MACD, Moving Average
    Crossover / RSI / MACD strategies.
 5. **Backtesting & reporting** — `run_backtest.py`, performance metrics

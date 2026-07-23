@@ -43,6 +43,7 @@ class Settings:
     logs_dir: Path = PROJECT_ROOT / "logs"
     reports_dir: Path = PROJECT_ROOT / "reports"
     cache_dir: Path = PROJECT_ROOT / "database" / "cache"
+    latest_price_cache_ttl_seconds: float = 60.0
 
     # Email (all optional — reports are only emailed if these are set)
     email_username: str = ""
@@ -93,6 +94,7 @@ def get_settings() -> Settings:
         logs_dir=Path(os.getenv("LOGS_DIR", str(PROJECT_ROOT / "logs"))),
         reports_dir=Path(os.getenv("REPORTS_DIR", str(PROJECT_ROOT / "reports"))),
         cache_dir=Path(os.getenv("CACHE_DIR", str(PROJECT_ROOT / "database" / "cache"))),
+        latest_price_cache_ttl_seconds=float(os.getenv("LATEST_PRICE_CACHE_TTL_SECONDS", "60.0")),
         email_username=os.getenv("EMAIL_USERNAME", ""),
         email_password=os.getenv("EMAIL_PASSWORD", ""),
         email_to=os.getenv("EMAIL_TO", ""),
