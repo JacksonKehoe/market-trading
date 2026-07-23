@@ -25,3 +25,23 @@ class FakeMarketDataProvider(MarketDataProvider):
 
     def set_price(self, symbol: str, price: float) -> None:
         self._prices[symbol] = price
+
+
+def make_price_frame(closes: list[float], start: str = "2026-01-01") -> pd.DataFrame:
+    """Build a minimal OHLCV DataFrame from a list of closing prices.
+
+    Open/high/low are set equal to close and volume is constant — these
+    indicator/strategy tests only care about the `close` column, so the
+    other columns just need to satisfy the OHLCV shape.
+    """
+    index = pd.date_range(start, periods=len(closes), freq="D")
+    return pd.DataFrame(
+        {
+            "open": closes,
+            "high": closes,
+            "low": closes,
+            "close": closes,
+            "volume": [1_000] * len(closes),
+        },
+        index=index,
+    )

@@ -11,7 +11,7 @@ strategies with virtual money before any real capital is ever risked.
 
 ## Status
 
-Phase 3 — market data. See [Development Phases](#development-phases).
+Phase 4 — strategies & indicators. See [Development Phases](#development-phases).
 
 ## Quickstart
 
@@ -53,8 +53,8 @@ scheduler                     (top-level orchestration; wires everything togethe
 | `app/config` | Loads `.env` into a single typed, immutable `Settings` object via `get_settings()`. Every other module receives settings by argument rather than reading `os.environ` itself. | nothing |
 | `app/utils` | Cross-cutting helpers — currently `logging_config.py`, which wires up five rotating log files (`app`, `trades`, `errors`, `scheduler`, `market_data`). | nothing |
 | `app/data` | `MarketDataProvider` interface; `YFinanceProvider` (free, no API key, US equities + ETFs); `CachedMarketDataProvider`, a decorator adding an on-disk Parquet history cache and a short-TTL in-memory latest-price cache around any provider; `load_watchlist` resolves `Settings.watchlist` into a deduplicated symbol list; `build_market_data_provider` wires the concrete (cached, yfinance-backed) stack for real use. Strategies never call a data vendor directly. | `models`, `config` |
-| `app/indicators` | Pure functions (SMA/EMA, RSI, MACD) operating on `pandas` Series — no classes, no state. | nothing |
-| `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD). Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators` |
+| `app/indicators` | Pure functions operating on `pandas` Series — no classes, no state: `sma`/`ema`, `rsi` (Wilder's smoothing), `macd` (returns a `macd`/`signal`/`histogram` DataFrame). `NaN` during warm-up instead of a misleadingly early value. | nothing |
+| `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD), plus a shared `_hold()` helper for the common "not enough history" case. Three implementations: `MovingAverageCrossoverStrategy`, `RsiStrategy` (oversold/overbought bounce), `MacdStrategy` — all edge-triggered (fire once on the actual cross, not every bar the condition holds). Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators` |
 | `app/portfolio` | `Portfolio` — the in-memory ledger `PaperBroker` uses to simulate an account: applies fills, tracks cash/positions/realized P/L, computes equity and unrealized P/L against a price map. No DB access — persistence is a separate concern. | `models` |
 | `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
@@ -115,6 +115,15 @@ scheduler                     (top-level orchestration; wires everything togethe
   the concrete data stack.** Everything above it — strategies, the
   execution engine, the backtester — depends only on `MarketDataProvider`.
   Swapping or adding a data vendor means changing this one function.
+- **Strategies signal on the crossover event, not the ongoing state.**
+  `MovingAverageCrossoverStrategy`/`RsiStrategy`/`MacdStrategy` compare
+  the previous bar's relationship (fast vs. slow MA, RSI vs. threshold,
+  MACD vs. signal line) to the current bar's, and only emit BUY/SELL when
+  it actually flipped. The simpler alternative — signal BUY on every bar
+  the condition holds — happens to be harmless here too, since
+  `RiskManager` already refuses to re-buy a symbol it's holding, but
+  edge-triggering is the more standard, portable definition of
+  "crossover" and doesn't rely on that downstream guard to behave correctly.
 
 ## Project layout
 
@@ -126,8 +135,10 @@ app/
 ├── data/         base.py, yfinance_provider.py, cache.py, watchlist.py, factory.py
 │                                        — MarketDataProvider, YFinanceProvider,
 │                                          CachedMarketDataProvider, load_watchlist
-├── indicators/                          — SMA/EMA/RSI/MACD (Phase 4)
-├── strategies/   base.py                — Strategy interface
+├── indicators/   moving_average.py, rsi.py, macd.py
+│                                        — sma, ema, rsi, macd
+├── strategies/   base.py, moving_average_crossover.py, rsi_strategy.py, macd_strategy.py
+│                                        — Strategy interface + 3 implementations
 ├── portfolio/    portfolio.py           — Portfolio ledger (cash/positions/P&L)
 ├── risk/         rules.py, risk_manager.py — RiskLimits + RiskManager
 ├── execution/    broker_base.py, paper_broker.py, engine.py, repository.py
@@ -159,8 +170,8 @@ working default, so the app runs with no `.env` file at all.
    `MarketDataProvider`, `BrokerInterface`), database bootstrap.
 2. **Paper trading engine** — `PaperBroker`, `Portfolio`,
    `RiskManager`, `ExecutionEngine`, ORM persistence for trades/positions.
-3. **Market data** *(this phase)* — `yfinance` provider + on-disk cache, watchlist loading.
-4. **Strategies & indicators** — SMA/EMA/RSI/MACD, Moving Average
+3. **Market data** — `yfinance` provider + on-disk cache, watchlist loading.
+4. **Strategies & indicators** *(this phase)* — SMA/EMA/RSI/MACD, Moving Average
    Crossover / RSI / MACD strategies.
 5. **Backtesting & reporting** — `run_backtest.py`, performance metrics
    (Sharpe, CAGR, drawdown, ...), equity curve + benchmark charts.

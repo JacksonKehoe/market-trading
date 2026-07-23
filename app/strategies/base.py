@@ -11,10 +11,12 @@ paper trading, and (eventually) live trading.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 import pandas as pd
 
 from app.models.domain import Signal
+from app.models.enums import SignalType
 
 
 class Strategy(ABC):
@@ -33,3 +35,14 @@ class Strategy(ABC):
         any lookback window they need must come out of `data` itself.
         """
         raise NotImplementedError
+
+    def _hold(self, symbol: str, timestamp: datetime, price: float, reason: str) -> Signal:
+        """Shared helper for the common "no action" case (e.g. still warming up)."""
+        return Signal(
+            symbol=symbol,
+            signal_type=SignalType.HOLD,
+            timestamp=timestamp,
+            price=price,
+            strategy_name=self.name,
+            reason=reason,
+        )
