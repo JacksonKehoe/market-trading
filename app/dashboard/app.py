@@ -112,7 +112,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         chart_html = None
         if any(not curve.empty for curve in equity_curves.values()):
             chart_html = build_multi_equity_curve_chart(equity_curves).to_html(
-                full_html=False, include_plotlyjs="cdn"
+                full_html=False, include_plotlyjs="cdn", div_id="strategy-comparison-chart"
             )
 
         recent_trades = sorted(all_trades, key=lambda t: t["fill"].timestamp, reverse=True)[:_MAX_RECENT_TRADES]

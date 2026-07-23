@@ -22,6 +22,10 @@
   .disclaimer { background: #fff3cd; border: 1px solid #ffe08a; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.9rem; }
   .chart-container { margin-bottom: 1.5rem; background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0.5rem; }
   footer { color: #888; font-size: 0.8rem; margin-top: 2rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 1.25rem; align-items: center; margin-bottom: 0.75rem; font-size: 0.9rem; }
+  .controls select { margin-left: 0.4rem; padding: 0.2rem 0.4rem; }
+  .controls label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+  .strategy-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -50,6 +54,16 @@
 
   <h2>Performance</h2>
   {% if chart_html %}
+    <div class="controls">
+      <label>Strategy:
+        <select id="chart-strategy-filter" onchange="filterChart()">
+          <option value="all">All Strategies</option>
+          {% for c in comparison %}
+            <option value="{{ c.strategy }}">{{ c.strategy }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
     <div class="chart-container">{{ chart_html | safe }}</div>
   {% else %}
     <p><em>No equity history yet -- run the scheduler (or a manual trade) to start building the equity curve.</em></p>
@@ -76,16 +90,27 @@
   </table>
 
   <h2>Strategy Signals</h2>
-  <table>
-    <thead><tr><th>Strategy</th><th>Symbol</th><th>Signal</th><th>Price</th><th>Reason</th></tr></thead>
+  <div class="controls">
+    <label>Strategy:
+      <select id="signal-strategy-filter" onchange="filterSignals()">
+        <option value="all">All Strategies</option>
+        {% for c in comparison %}
+          <option value="{{ c.strategy }}">{{ c.strategy }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label><input type="checkbox" id="toggle-reason" checked onchange="toggleReason()"> Show reason</label>
+  </div>
+  <table id="signals-table">
+    <thead><tr><th>Strategy</th><th>Symbol</th><th>Signal</th><th>Price</th><th class="reason-col">Reason</th></tr></thead>
     <tbody>
     {% for s in signals %}
-      <tr>
-        <td>{{ s.strategy_name }}</td>
+      <tr data-strategy="{{ s.strategy_name }}">
+        <td><span class="strategy-badge">{{ s.strategy_name }}</span></td>
         <td>{{ s.symbol }}</td>
         <td class="{{ 'buy' if s.signal_type.value == 'BUY' else ('sell' if s.signal_type.value == 'SELL' else 'hold') }}">{{ s.signal_type.value }}</td>
         <td>${{ "%.2f"|format(s.price) }}</td>
-        <td>{{ s.reason }}</td>
+        <td class="reason-col">{{ s.reason }}</td>
       </tr>
     {% else %}
       <tr><td colspan="5">No signal data available.</td></tr>
@@ -130,5 +155,31 @@
   </table>
 
   <footer>market-trading paper trading dashboard — read-only, localhost only.</footer>
+
+  <script>
+    function filterSignals() {
+      var value = document.getElementById('signal-strategy-filter').value;
+      document.querySelectorAll('#signals-table tbody tr[data-strategy]').forEach(function (row) {
+        row.style.display = (value === 'all' || row.dataset.strategy === value) ? '' : 'none';
+      });
+    }
+
+    function toggleReason() {
+      var show = document.getElementById('toggle-reason').checked;
+      document.querySelectorAll('.reason-col').forEach(function (el) {
+        el.style.display = show ? '' : 'none';
+      });
+    }
+
+    function filterChart() {
+      var value = document.getElementById('chart-strategy-filter').value;
+      var chart = document.getElementById('strategy-comparison-chart');
+      if (!chart || !chart.data) return;
+      var visibility = chart.data.map(function (trace) {
+        return value === 'all' || trace.name === value;
+      });
+      Plotly.restyle(chart, { visible: visibility });
+    }
+  </script>
 </body>
 </html>
