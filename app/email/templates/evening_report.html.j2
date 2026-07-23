@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Evening Trading Report — {{ generated_at.strftime("%Y-%m-%d") }}</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2rem auto; max-width: 900px; color: #1a1a1a; background: #fafafa; }
+  h1, h2 { color: #111; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; background: white; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
+  th { background: #f0f0f0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .summary-card { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; }
+  .summary-label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+  .summary-value { font-size: 1.3rem; font-weight: 600; margin-top: 0.25rem; }
+  .positive { color: #0a7d2c; }
+  .negative { color: #c0362c; }
+  .buy { color: #0a7d2c; font-weight: 600; }
+  .sell { color: #c0362c; font-weight: 600; }
+  .disclaimer { background: #fff3cd; border: 1px solid #ffe08a; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  .chart-container { margin-bottom: 1.5rem; background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0.5rem; }
+  ul.recs { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem 1rem 1rem 2rem; }
+</style>
+</head>
+<body>
+  <div class="disclaimer">Paper trading only. All figures reflect simulated positions -- no real trades were placed.</div>
+
+  <h1>Evening Trading Report</h1>
+  <p>
+    <strong>Strategy:</strong> {{ strategy_name }} &nbsp;|&nbsp;
+    <strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
+  </p>
+
+  <h2>Account</h2>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-label">Portfolio Value</div><div class="summary-value">${{ "%.2f"|format(portfolio_value) }}</div></div>
+    <div class="summary-card"><div class="summary-label">Cash</div><div class="summary-value">${{ "%.2f"|format(cash) }}</div></div>
+    <div class="summary-card">
+      <div class="summary-label">Day P/L</div>
+      <div class="summary-value {{ 'positive' if day_pl >= 0 else 'negative' }}">${{ "%.2f"|format(day_pl) }} ({{ "%.2f"|format(day_pl_pct) }}%)</div>
+    </div>
+    <div class="summary-card"><div class="summary-label">Open Positions</div><div class="summary-value">{{ positions | length }}</div></div>
+  </div>
+
+  {% if best_performer or worst_performer %}
+  <h2>Best / Worst Performer</h2>
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="summary-label">Best Performer</div>
+      {% if best_performer %}
+        <div class="summary-value positive">{{ best_performer.symbol }} ({{ "%.2f"|format(best_performer.unrealized_pl_pct) }}%)</div>
+      {% else %}
+        <div class="summary-value">N/A</div>
+      {% endif %}
+    </div>
+    <div class="summary-card">
+      <div class="summary-label">Worst Performer</div>
+      {% if worst_performer %}
+        <div class="summary-value negative">{{ worst_performer.symbol }} ({{ "%.2f"|format(worst_performer.unrealized_pl_pct) }}%)</div>
+      {% else %}
+        <div class="summary-value">N/A</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <h2>Equity Curve</h2>
+  {% if equity_chart_html %}
+    <div class="chart-container">{{ equity_chart_html | safe }}</div>
+  {% else %}
+    <p><em>Not enough history yet to chart an equity curve.</em></p>
+  {% endif %}
+
+  <h2>Trades Executed Today</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Realized P/L</th></tr></thead>
+    <tbody>
+    {% for t in trades_today %}
+      <tr>
+        <td>{{ t.fill.timestamp.strftime("%H:%M") }}</td>
+        <td>{{ t.fill.symbol }}</td>
+        <td class="{{ 'buy' if t.fill.side.value == 'BUY' else 'sell' }}">{{ t.fill.side.value }}</td>
+        <td>{{ t.fill.quantity }}</td>
+        <td>${{ "%.2f"|format(t.fill.price) }}</td>
+        <td>{% if t.pnl is not none %}<span class="{{ 'positive' if t.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(t.pnl) }}</span>{% else %}—{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">No trades executed today.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Open Positions</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead>
+    <tbody>
+    {% for p in positions %}
+      <tr>
+        <td>{{ p.symbol }}</td>
+        <td>{{ p.quantity }}</td>
+        <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
+        <td>${{ "%.2f"|format(p.current_price) }}</td>
+        <td class="{{ 'positive' if p.unrealized_pl >= 0 else 'negative' }}">${{ "%.2f"|format(p.unrealized_pl) }} ({{ "%.2f"|format(p.unrealized_pl_pct) }}%)</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No open positions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Risk Summary</h2>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-label">Allocation</div><div class="summary-value">{{ "%.1f"|format(risk_summary.allocation_pct) }}%</div></div>
+    <div class="summary-card"><div class="summary-label">Open / Max Positions</div><div class="summary-value">{{ risk_summary.open_positions }} / {{ risk_summary.max_open_positions }}</div></div>
+    <div class="summary-card"><div class="summary-label">Cash Reserve</div><div class="summary-value">{{ "%.1f"|format(risk_summary.cash_reserve_pct) }}%</div></div>
+    <div class="summary-card"><div class="summary-label">Stop Loss / Take Profit</div><div class="summary-value">{{ "%.0f"|format((risk_summary.stop_loss_pct or 0) * 100) }}% / {{ "%.0f"|format((risk_summary.take_profit_pct or 0) * 100) }}%</div></div>
+  </div>
+
+  <h2>Strategy Recommendations</h2>
+  <ul class="recs">
+    {% for line in recommendations %}
+      <li>{{ line }}</li>
+    {% endfor %}
+  </ul>
+
+  <h2>Next Day's Watchlist</h2>
+  <p>{{ next_watchlist | join(", ") if next_watchlist else "All watchlist symbols are currently held." }}</p>
+</body>
+</html>

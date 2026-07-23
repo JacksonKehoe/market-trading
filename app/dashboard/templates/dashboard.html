@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Paper Trading Dashboard</title>
+<meta http-equiv="refresh" content="60">
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2rem auto; max-width: 1100px; color: #1a1a1a; background: #fafafa; }
+  h1, h2 { color: #111; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; background: white; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
+  th { background: #f0f0f0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .summary-card { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; }
+  .summary-label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+  .summary-value { font-size: 1.3rem; font-weight: 600; margin-top: 0.25rem; }
+  .positive { color: #0a7d2c; }
+  .negative { color: #c0362c; }
+  .buy { color: #0a7d2c; font-weight: 600; }
+  .sell { color: #c0362c; font-weight: 600; }
+  .hold { color: #888; }
+  .disclaimer { background: #fff3cd; border: 1px solid #ffe08a; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  .chart-container { margin-bottom: 1.5rem; background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0.5rem; }
+  footer { color: #888; font-size: 0.8rem; margin-top: 2rem; }
+</style>
+</head>
+<body>
+  <div class="disclaimer">Paper trading only. All figures reflect simulated positions -- no real trades have been placed. Refreshes every 60s.</div>
+
+  <h1>Paper Trading Dashboard</h1>
+  <p><strong>Strategy:</strong> {{ strategy_name }} &nbsp;|&nbsp; <strong>As of:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M:%S") }}</p>
+
+  <h2>Portfolio</h2>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-label">Equity</div><div class="summary-value">${{ "%.2f"|format(equity) }}</div></div>
+    <div class="summary-card"><div class="summary-label">Cash</div><div class="summary-value">${{ "%.2f"|format(cash) }}</div></div>
+    <div class="summary-card"><div class="summary-label">Positions Value</div><div class="summary-value">${{ "%.2f"|format(positions_value) }}</div></div>
+    <div class="summary-card"><div class="summary-label">Open Positions</div><div class="summary-value">{{ positions | length }}</div></div>
+  </div>
+
+  <h2>Performance</h2>
+  {% if chart_html %}
+    <div class="chart-container">{{ chart_html | safe }}</div>
+  {% else %}
+    <p><em>No equity history yet -- run the scheduler (or a manual trade) to start building the equity curve.</em></p>
+  {% endif %}
+
+  <h2>Current Holdings</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Market Value</th><th>Unrealized P/L</th></tr></thead>
+    <tbody>
+    {% for p in positions %}
+      <tr>
+        <td>{{ p.symbol }}</td>
+        <td>{{ p.quantity }}</td>
+        <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
+        <td>${{ "%.2f"|format(p.current_price) }}</td>
+        <td>${{ "%.2f"|format(p.market_value) }}</td>
+        <td class="{{ 'positive' if p.unrealized_pl >= 0 else 'negative' }}">${{ "%.2f"|format(p.unrealized_pl) }} ({{ "%.2f"|format(p.unrealized_pl_pct) }}%)</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">No open positions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Strategy Signals</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Signal</th><th>Price</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for s in signals %}
+      <tr>
+        <td>{{ s.symbol }}</td>
+        <td class="{{ 'buy' if s.signal_type.value == 'BUY' else ('sell' if s.signal_type.value == 'SELL' else 'hold') }}">{{ s.signal_type.value }}</td>
+        <td>${{ "%.2f"|format(s.price) }}</td>
+        <td>{{ s.reason }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">No signal data available.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Risk Metrics</h2>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-label">Allocation</div><div class="summary-value">{{ "%.1f"|format(risk_summary.allocation_pct) }}%</div></div>
+    <div class="summary-card"><div class="summary-label">Open / Max Positions</div><div class="summary-value">{{ risk_summary.open_positions }} / {{ risk_summary.max_open_positions }}</div></div>
+    <div class="summary-card"><div class="summary-label">Cash Reserve</div><div class="summary-value">{{ "%.1f"|format(risk_summary.cash_reserve_pct) }}%</div></div>
+    <div class="summary-card"><div class="summary-label">Stop Loss / Take Profit</div><div class="summary-value">{{ "%.0f"|format((risk_summary.stop_loss_pct or 0) * 100) }}% / {{ "%.0f"|format((risk_summary.take_profit_pct or 0) * 100) }}%</div></div>
+  </div>
+
+  <h2>Recent Transactions</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Commission</th></tr></thead>
+    <tbody>
+    {% for t in trades %}
+      <tr>
+        <td>{{ t.timestamp.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td>{{ t.symbol }}</td>
+        <td class="{{ 'buy' if t.side.value == 'BUY' else 'sell' }}">{{ t.side.value }}</td>
+        <td>{{ t.quantity }}</td>
+        <td>${{ "%.2f"|format(t.price) }}</td>
+        <td>${{ "%.2f"|format(t.commission) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">No trades yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <footer>market-trading paper trading dashboard — read-only, localhost only.</footer>
+</body>
+</html>

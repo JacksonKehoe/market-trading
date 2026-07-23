@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Morning Trading Report — {{ generated_at.strftime("%Y-%m-%d") }}</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; margin: 2rem auto; max-width: 900px; color: #1a1a1a; background: #fafafa; }
+  h1, h2 { color: #111; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; background: white; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
+  th { background: #f0f0f0; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .summary-card { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; }
+  .summary-label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+  .summary-value { font-size: 1.3rem; font-weight: 600; margin-top: 0.25rem; }
+  .positive { color: #0a7d2c; }
+  .negative { color: #c0362c; }
+  .buy { color: #0a7d2c; font-weight: 600; }
+  .sell { color: #c0362c; font-weight: 600; }
+  .disclaimer { background: #fff3cd; border: 1px solid #ffe08a; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  ul.plan { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem 1rem 1rem 2rem; }
+</style>
+</head>
+<body>
+  <div class="disclaimer">Paper trading only. All figures reflect simulated positions -- no real trades were placed.</div>
+
+  <h1>Morning Trading Report</h1>
+  <p>
+    <strong>Strategy:</strong> {{ strategy_name }} &nbsp;|&nbsp;
+    <strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
+  </p>
+
+  <h2>Market Summary</h2>
+  <p>Watchlist average move (last close vs. prior close):
+    <strong class="{{ 'positive' if market_summary_pct >= 0 else 'negative' }}">{{ "%.2f"|format(market_summary_pct) }}%</strong>
+  </p>
+
+  <h2>Account</h2>
+  <div class="summary-grid">
+    <div class="summary-card"><div class="summary-label">Portfolio Value</div><div class="summary-value">${{ "%.2f"|format(portfolio_value) }}</div></div>
+    <div class="summary-card"><div class="summary-label">Cash Available</div><div class="summary-value">${{ "%.2f"|format(cash) }}</div></div>
+    <div class="summary-card"><div class="summary-label">Open Positions</div><div class="summary-value">{{ positions | length }}</div></div>
+  </div>
+
+  <h2>Open Positions</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead>
+    <tbody>
+    {% for p in positions %}
+      <tr>
+        <td>{{ p.symbol }}</td>
+        <td>{{ p.quantity }}</td>
+        <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
+        <td>${{ "%.2f"|format(p.current_price) }}</td>
+        <td class="{{ 'positive' if p.unrealized_pl >= 0 else 'negative' }}">${{ "%.2f"|format(p.unrealized_pl) }} ({{ "%.2f"|format(p.unrealized_pl_pct) }}%)</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5">No open positions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Watchlist</h2>
+  <p>{{ watchlist | join(", ") }}</p>
+
+  <h2>Signals</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Signal</th><th>Price</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for s in buy_signals %}
+      <tr><td>{{ s.symbol }}</td><td class="buy">BUY</td><td>${{ "%.2f"|format(s.price) }}</td><td>{{ s.reason }}</td></tr>
+    {% endfor %}
+    {% for s in sell_signals %}
+      <tr><td>{{ s.symbol }}</td><td class="sell">SELL</td><td>${{ "%.2f"|format(s.price) }}</td><td>{{ s.reason }}</td></tr>
+    {% endfor %}
+    {% if not buy_signals and not sell_signals %}
+      <tr><td colspan="4">No BUY/SELL signals today ({{ hold_count }} symbol(s) holding).</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+
+  <h2>Largest Movers</h2>
+  <table>
+    <thead><tr><th>Symbol</th><th>Price</th><th>Change</th></tr></thead>
+    <tbody>
+    {% for m in market_movers %}
+      <tr>
+        <td>{{ m.symbol }}</td>
+        <td>${{ "%.2f"|format(m.price) }}</td>
+        <td class="{{ 'positive' if m.change_pct >= 0 else 'negative' }}">{{ "%.2f"|format(m.change_pct) }}%</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="3">No market mover data available.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Upcoming Earnings &amp; Economic Events</h2>
+  <p><em>Not available in this version -- no earnings/economic calendar data source is configured.</em></p>
+
+  <h2>Daily Trading Plan</h2>
+  <ul class="plan">
+    {% for line in daily_trading_plan %}
+      <li>{{ line }}</li>
+    {% endfor %}
+  </ul>
+</body>
+</html>

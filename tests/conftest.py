@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from app.data.base import MarketDataProvider
+from app.database.engine import Base
+from app.database.repository import SqlTradeRepository
 
 
 class FakeMarketDataProvider(MarketDataProvider):
@@ -49,6 +54,14 @@ class FakeHistoricalMarketDataProvider(MarketDataProvider):
         if data is None or data.empty:
             raise ValueError(f"No data available for {symbol!r}")
         return float(data["close"].iloc[-1])
+
+
+def build_test_repository(db_path: Path) -> SqlTradeRepository:
+    """A `SqlTradeRepository` backed by a throwaway SQLite file — for tests
+    that need real persistence (not a fake) without touching the real DB."""
+    engine = create_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(engine)
+    return SqlTradeRepository(sessionmaker(bind=engine, expire_on_commit=False))
 
 
 def make_price_frame(closes: list[float], start: str = "2026-01-01") -> pd.DataFrame:

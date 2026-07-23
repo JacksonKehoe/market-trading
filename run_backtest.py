@@ -22,23 +22,14 @@ from app.reporting.backtest import Backtester
 from app.reporting.metrics import compute_metrics
 from app.reporting.report_generator import generate_backtest_report
 from app.risk.rules import RiskLimits
-from app.strategies.base import Strategy
-from app.strategies.macd_strategy import MacdStrategy
-from app.strategies.moving_average_crossover import MovingAverageCrossoverStrategy
-from app.strategies.rsi_strategy import RsiStrategy
+from app.strategies.factory import available_strategies, build_strategy
 from app.utils.logging_config import configure_logging
-
-_STRATEGY_FACTORIES: dict[str, type] = {
-    "sma": MovingAverageCrossoverStrategy,
-    "rsi": RsiStrategy,
-    "macd": MacdStrategy,
-}
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--symbols", default=None, help="Comma-separated symbols (defaults to WATCHLIST)")
-    parser.add_argument("--strategy", choices=sorted(_STRATEGY_FACTORIES), default="sma")
+    parser.add_argument("--strategy", choices=available_strategies(), default="sma")
     parser.add_argument("--start", default=None, help="YYYY-MM-DD (defaults to one year before --end)")
     parser.add_argument("--end", default=None, help="YYYY-MM-DD (defaults to today)")
     parser.add_argument(
@@ -46,10 +37,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--initial-capital", type=float, default=None, help="Defaults to INITIAL_CAPITAL")
     return parser.parse_args(argv)
-
-
-def _build_strategy(name: str) -> Strategy:
-    return _STRATEGY_FACTORIES[name]()
 
 
 def main(argv: list[str] | None = None, settings: Settings | None = None) -> int:
@@ -71,7 +58,7 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
     initial_capital = args.initial_capital if args.initial_capital is not None else settings.initial_capital
     benchmark_symbol = args.benchmark.strip().upper() if args.benchmark and args.benchmark.strip() else None
 
-    strategy = _build_strategy(args.strategy)
+    strategy = build_strategy(args.strategy)
     provider = build_market_data_provider(settings)
     risk_limits = RiskLimits.from_settings(settings)
     backtester = Backtester(

@@ -8,6 +8,9 @@ SQLAlchemy — being a dependency of the execution layer.
 
 from __future__ import annotations
 
+from datetime import datetime
+
+import pandas as pd
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database.orm_models import AccountSnapshotRecord, PositionRecord, TradeRecord
@@ -80,11 +83,13 @@ class SqlTradeRepository:
             )
             session.commit()
 
-    def list_trades(self, symbol: str | None = None) -> list[Fill]:
+    def list_trades(self, symbol: str | None = None, since: datetime | None = None) -> list[Fill]:
         with self._session_factory() as session:
             query = session.query(TradeRecord)
             if symbol is not None:
                 query = query.filter_by(symbol=symbol)
+            if since is not None:
+                query = query.filter(TradeRecord.timestamp >= since)
             return [self._to_fill(record) for record in query.order_by(TradeRecord.timestamp).all()]
 
     def list_open_positions(self) -> list[Position]:
@@ -98,6 +103,37 @@ class SqlTradeRepository:
                 )
                 for record in session.query(PositionRecord).all()
             ]
+
+    def latest_cash_balance(self) -> float | None:
+        """Cash from the most recent account snapshot, or `None` if none exists yet.
+
+        Used on startup to resume a paper trading account across process
+        restarts instead of silently resetting to `INITIAL_CAPITAL` every
+        time the scheduler or dashboard starts.
+        """
+        with self._session_factory() as session:
+            record = (
+                session.query(AccountSnapshotRecord)
+                .order_by(AccountSnapshotRecord.timestamp.desc())
+                .first()
+            )
+            return None if record is None else record.cash
+
+    def equity_curve(self, since: datetime | None = None) -> pd.Series:
+        """Persisted equity snapshots as a `pandas.Series` indexed by timestamp."""
+        with self._session_factory() as session:
+            query = session.query(AccountSnapshotRecord)
+            if since is not None:
+                query = query.filter(AccountSnapshotRecord.timestamp >= since)
+            records = query.order_by(AccountSnapshotRecord.timestamp).all()
+
+        series = pd.Series(
+            [record.equity for record in records],
+            index=pd.DatetimeIndex([record.timestamp for record in records]),
+            dtype=float,
+        )
+        series.index.name = "timestamp"
+        return series
 
     @staticmethod
     def _to_fill(record: TradeRecord) -> Fill:

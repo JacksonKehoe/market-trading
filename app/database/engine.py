@@ -22,24 +22,35 @@ class Base(DeclarativeBase):
     """Shared declarative base for every ORM model in the app."""
 
 
-_engine: Engine | None = None
-_SessionLocal: sessionmaker[Session] | None = None
+_engines: dict[str, Engine] = {}
+_session_factories: dict[str, sessionmaker[Session]] = {}
 
 
 def get_engine(settings: Settings | None = None) -> Engine:
-    global _engine
-    if _engine is None:
-        settings = settings or get_settings()
+    """Return the (process-wide) engine for `settings.database_url`.
+
+    Keyed by database URL rather than a single unconditional singleton:
+    the real app only ever uses one `Settings`/one database per process,
+    so this is still effectively a singleton in production, but it also
+    means two different `Settings` instances (as happens across tests,
+    or the scheduler/dashboard pointed at different databases) each get
+    their own engine instead of silently sharing whichever one was
+    created first.
+    """
+    settings = settings or get_settings()
+    url = settings.database_url
+    if url not in _engines:
         settings.database_path.parent.mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(settings.database_url, connect_args={"check_same_thread": False})
-    return _engine
+        _engines[url] = create_engine(url, connect_args={"check_same_thread": False})
+    return _engines[url]
 
 
 def get_session_factory(settings: Settings | None = None) -> sessionmaker[Session]:
-    global _SessionLocal
-    if _SessionLocal is None:
-        _SessionLocal = sessionmaker(bind=get_engine(settings), expire_on_commit=False)
-    return _SessionLocal
+    settings = settings or get_settings()
+    url = settings.database_url
+    if url not in _session_factories:
+        _session_factories[url] = sessionmaker(bind=get_engine(settings), expire_on_commit=False)
+    return _session_factories[url]
 
 
 @contextmanager

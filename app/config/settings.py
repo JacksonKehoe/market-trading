@@ -68,6 +68,10 @@ class Settings:
     # Simulated trading costs
     commission_per_trade: float = 0.0
 
+    # Live/scheduled paper trading
+    strategy: str = "sma"
+    """Which Strategy the scheduler/dashboard use, by name (see app.strategies.factory)."""
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path.as_posix()}"
@@ -110,4 +114,5 @@ def get_settings() -> Settings:
         daily_loss_limit_pct=float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.03")),
         max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "10")),
         commission_per_trade=float(os.getenv("COMMISSION_PER_TRADE", "0.0")),
+        strategy=os.getenv("STRATEGY", "sma"),
     )

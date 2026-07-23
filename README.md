@@ -11,7 +11,7 @@ strategies with virtual money before any real capital is ever risked.
 
 ## Status
 
-Phase 5 — backtesting & reporting. See [Development Phases](#development-phases).
+Phase 6 — scheduler, email reports, dashboard. All six planned phases are complete. See [Development Phases](#development-phases).
 
 ## Quickstart
 
@@ -23,12 +23,28 @@ copy .env.example .env         # optional — sensible defaults work with no .en
 pytest
 
 python run_backtest.py --symbols AAPL,MSFT --strategy sma --start 2024-01-01 --end 2025-06-01 --benchmark SPY
+
+python run_scheduler.py    # runs morning/evening (+ optional hourly) paper-trading jobs on a schedule
+python run_dashboard.py    # local read-only dashboard at http://127.0.0.1:5000
 ```
 
-`run_backtest.py` fetches real historical data (via `yfinance`), replays
-the chosen strategy (`sma` / `rsi` / `macd`) through the paper trading
-engine, prints a performance summary, and saves a self-contained HTML
-report to `reports/`. It never places a real trade.
+- `run_backtest.py` fetches real historical data (via `yfinance`), replays
+  the chosen strategy (`sma` / `rsi` / `macd`) through the paper trading
+  engine, prints a performance summary, and saves a self-contained HTML
+  report to `reports/`.
+- `run_scheduler.py` starts a long-running process that scans the
+  watchlist and places simulated trades at the times configured by
+  `MORNING_REPORT_TIME`/`EVENING_REPORT_TIME` (plus an optional hourly
+  scan), saving an HTML report to `reports/` and emailing it if
+  `EMAIL_*` is configured. Paper trading state (cash/positions) persists
+  in the SQLite database and is restored automatically if the process
+  restarts.
+- `run_dashboard.py` starts a local Flask server (bound to
+  `127.0.0.1` only) showing live portfolio value, holdings, strategy
+  signals, risk metrics, and recent transactions, read straight from the
+  database. It never places a trade.
+
+None of these ever connect to a brokerage or place a real trade.
 
 ## Architecture
 
@@ -52,9 +68,11 @@ database                      (SQLAlchemy persistence; converts to/from models/d
 reporting                     (backtester replays strategies through execution;
         │                       + analytics, charts, HTML reports)
         │
-email, dashboard               (read from database + reporting; produce output)
+email, dashboard               (live account/report data -> HTML; email is
+        │                       optional, dashboard is read-only)
         │
-scheduler                     (top-level orchestration; wires everything together)
+scheduler                     (top-level orchestration: builds the live
+                                TradingContext, runs jobs on a schedule)
 ```
 
 `reporting` sits above `execution` for a specific reason: its `Backtester`
@@ -62,6 +80,14 @@ doesn't reimplement trading logic, it *replays* historical data through
 the real `PaperBroker`/`RiskManager`/`ExecutionEngine` — so it necessarily
 depends on everything below it (`data`, `strategies`, `portfolio`, `risk`,
 `execution`), not just `models`/`database` as earlier phases anticipated.
+`email` and `dashboard` similarly need broad read access to *live* state
+(a real `BrokerInterface`, `MarketDataProvider`, `SqlTradeRepository`) to
+show current positions and today's signals — but neither imports
+`app.scheduler`, which assembles that live state and sits strictly above
+both. `app.scheduler.context.TradingContext` is the one place that bundles
+broker + engine + repository + strategy + watchlist together; `email`'s
+functions take those pieces as plain parameters instead, so the dependency
+only points one way.
 
 | Module | Responsibility | Depends on |
 |---|---|---|
@@ -76,9 +102,9 @@ depends on everything below it (`data`, `strategies`, `portfolio`, `risk`,
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
 | `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord`); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
 | `app/reporting` | `Backtester` replays a `Strategy` across a watchlist and date range through the *real* `PaperBroker`/`RiskManager`/`ExecutionEngine` via `ReplayMarketDataProvider` (serves data "as of" a simulated date so nothing can see the future) — a backtest is the live paper-trading pipeline fed historical bars, not a separate simulation. `metrics.py` computes total return, CAGR, Sharpe, max drawdown, win rate, average gain/loss, profit factor, and expectancy from an equity curve + trade list (`compute_trade_pnl` reconstructs per-trade realized P&L by replaying fills through a scratch `Portfolio`). `charts.py` builds Plotly equity-curve and drawdown figures; `report_generator.py` renders them into a self-contained HTML file via Jinja2 and saves it to `reports/`. | `models`, `data`, `strategies`, `portfolio`, `risk`, `execution`, `database` |
-| `app/email` | (later phase) Jinja2 HTML report templates + SMTP sending, entirely optional (disabled unless `EMAIL_*` env vars are set). | `reporting` |
-| `app/scheduler` | (later phase) APScheduler jobs (morning/evening/hourly) that orchestrate data refresh → strategy scan → risk-checked paper trades → report generation → optional email. | everything above |
-| `app/dashboard` | (later phase) Lightweight local read-only view of portfolio/trades/signals. | `database`, `reporting` |
+| `app/email` | `report_data.py` builds the morning/evening report context (portfolio value, cash, positions, signals, market movers, day P&L, best/worst performer, risk summary, next-day watchlist) from a live `BrokerInterface` + `MarketDataProvider` + `SqlTradeRepository` + `Strategy`. `renderer.py` turns that into HTML via Jinja2 (embedding a Plotly equity-curve chart in the evening report). `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting` |
+| `app/scheduler` | `context.py` builds the live `TradingContext` (broker rehydrated from the DB, engine, repository, strategy, watchlist) — the paper-trading counterpart to `reporting.Backtester`. `jobs.py` has `morning_job` (reset daily-loss baseline, scan + trade, email + save report), `evening_job` (mark-to-market, email + save report), and `hourly_scan_job` (optional, trades only, no report). `scheduler_service.py` wires `Settings.morning_report_time`/`evening_report_time`/`hourly_scan_enabled` into APScheduler `CronTrigger`s. | everything above |
+| `app/dashboard` | A read-only Flask app (`app.py`, one route) showing live equity, cash, holdings, an equity-curve chart, strategy signals (computed on the fly, never executed), risk metrics, and recent transactions — all read from `SqlTradeRepository` plus one live price/signal check. Runs on `127.0.0.1` only; never writes to the database or places a trade. | `models`, `config`, `data`, `database`, `risk`, `strategies`, `reporting` |
 
 ### Key design decisions
 
@@ -160,6 +186,43 @@ depends on everything below it (`data`, `strategies`, `portfolio`, `risk`,
   a report is a single self-contained HTML file (Plotly's JS pulled from
   a CDN once and reused across charts) — charts or the metrics themselves
   could be reused by the dashboard or email reports later without change.
+  (They now are: the dashboard and the evening email report both reuse
+  `app.reporting.charts.build_equity_curve_chart` unchanged.)
+- **The scheduler rehydrates paper trading state from the database on
+  startup instead of resetting to `INITIAL_CAPITAL`.**
+  `build_trading_context` reads the most recent `AccountSnapshotRecord`
+  for cash and `list_open_positions()` for holdings, seeding a fresh
+  `PaperBroker`/`Portfolio` with them. Without this, restarting
+  `run_scheduler.py` would silently wipe out simulated trading history —
+  which would be a bad enough bug in any persistence layer, but especially
+  misleading in a tool whose entire purpose is tracking simulated
+  performance over time.
+- **`app.database.engine`'s `get_engine`/`get_session_factory` are keyed
+  by database URL, not an unconditional singleton.** They were originally
+  a plain "first call wins" cache; that's invisible in production (one
+  process always uses one `Settings`), but it silently broke any code
+  path that constructs more than one `Settings` in-process — which
+  `TradingContext` now legitimately does (real code, and every test that
+  exercises it). Keying by URL keeps the effectively-singleton behavior
+  in production while giving each distinct database its own engine.
+- **Email report builders take a `BrokerInterface`, not a `PaperBroker`.**
+  Same reasoning as `RiskManager`: `report_data.py` only calls
+  `get_account()`/`get_positions()`, so the identical report-building code
+  would work unchanged against a live broker later.
+- **The dashboard never holds a live broker or portfolio.** It reads
+  `SqlTradeRepository.list_open_positions()`/`equity_curve()`/`list_trades()`
+  directly — the database is the single source of truth once the
+  scheduler has persisted to it, so the dashboard doesn't need (and, since
+  it must never place a trade, shouldn't have) a `PaperBroker` of its own.
+  A tiny internal adapter (`_StaticPositionsView`) lets it reuse
+  `reporting.position_rows` — built for a live `BrokerInterface` — over
+  that static list without changing `position_rows`'s signature.
+- **"Today" in trade/report filtering is computed in UTC, not local time.**
+  `Fill`/`Account` timestamps are always UTC-aware (`PaperBroker` uses
+  `datetime.now(UTC)` throughout); comparing them against Python's
+  local-timezone `date.today()` would misclassify trades near midnight
+  UTC for any non-UTC user. Precise local-market-timezone trading-day
+  boundaries (e.g. NYSE's 4pm ET close) are out of scope for this version.
 
 ## Project layout
 
@@ -181,26 +244,33 @@ app/
 │                                        — BrokerInterface, PaperBroker, ExecutionEngine
 ├── database/     engine.py, orm_models.py, repository.py
 │                                        — SQLAlchemy engine/session + SqlTradeRepository
-├── reporting/    backtest.py, metrics.py, charts.py, report_generator.py, templates/
+├── reporting/    backtest.py, metrics.py, charts.py, positions.py, report_generator.py, templates/
 │                                        — Backtester, PerformanceMetrics, Plotly charts,
-│                                          HTML report generation
-├── email/                               — Jinja2 templates + SMTP sender
-├── scheduler/                           — APScheduler jobs
-└── dashboard/                           — local read-only dashboard
+│                                          position_rows, HTML report generation
+├── email/        mailer.py, report_data.py, renderer.py, templates/
+│                                        — SMTP sender, report context builders, Jinja2 rendering
+├── scheduler/    context.py, jobs.py, scheduler_service.py
+│                                        — TradingContext, morning/evening/hourly jobs, APScheduler wiring
+└── dashboard/    app.py, templates/     — read-only Flask app
 database/         SQLite file + on-disk market-data cache (gitignored)
 logs/             app.log, trades.log, errors.log, scheduler.log, market_data.log (gitignored)
 reports/          generated HTML/chart output (gitignored)
 tests/            pytest suite
-run_backtest.py   CLI entrypoint: python run_backtest.py --symbols AAPL,MSFT --strategy sma
+run_backtest.py   python run_backtest.py --symbols AAPL,MSFT --strategy sma
+run_scheduler.py  python run_scheduler.py            — starts the paper-trading scheduler
+run_dashboard.py  python run_dashboard.py [--port N]  — starts the local dashboard
 ```
 
 ## Configuration
 
 All configuration lives in `.env` (see `.env.example` for the full list
-with defaults: `INITIAL_CAPITAL`, `WATCHLIST`, `DATABASE_PATH`,
-`EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`, `MORNING_REPORT_TIME`,
-`EVENING_REPORT_TIME`, risk-limit percentages, etc.). Every value has a
-working default, so the app runs with no `.env` file at all.
+with defaults: `INITIAL_CAPITAL`, `WATCHLIST`, `STRATEGY` (`sma`/`rsi`/`macd`),
+`DATABASE_PATH`, `EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`,
+`MORNING_REPORT_TIME`, `EVENING_REPORT_TIME`, `HOURLY_SCAN_ENABLED`,
+risk-limit percentages, etc.). Every value has a working default, so the
+app runs with no `.env` file and no email credentials at all — email
+sending is skipped (and logged) when `EMAIL_*` isn't fully configured,
+and every report is still saved to `reports/` regardless.
 
 ## Development phases
 
@@ -212,9 +282,10 @@ working default, so the app runs with no `.env` file at all.
 3. **Market data** — `yfinance` provider + on-disk cache, watchlist loading.
 4. **Strategies & indicators** — SMA/EMA/RSI/MACD, Moving Average
    Crossover / RSI / MACD strategies.
-5. **Backtesting & reporting** *(this phase)* — `run_backtest.py`, performance metrics
+5. **Backtesting & reporting** — `run_backtest.py`, performance metrics
    (Sharpe, CAGR, drawdown, ...), equity curve + benchmark charts.
-6. **Scheduler, email reports, dashboard** — morning/evening jobs, HTML
-   email reports, local dashboard.
+6. **Scheduler, email reports, dashboard** *(this phase)* — morning/evening
+   jobs (`run_scheduler.py`), HTML email reports, local dashboard
+   (`run_dashboard.py`).
 
-Each phase ships runnable and tested before the next begins.
+Each phase shipped runnable and tested before the next began. All six are complete.

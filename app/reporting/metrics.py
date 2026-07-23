@@ -19,8 +19,8 @@ from app.portfolio.portfolio import Portfolio
 _TRADING_DAYS_PER_YEAR = 252
 
 
-def compute_trade_pnl(trades: list[Fill]) -> list[float]:
-    """Reconstruct realized P&L per closed (SELL) trade from a fill list.
+def compute_realized_pnl_by_fill(trades: list[Fill]) -> dict[str, float]:
+    """Reconstruct realized P&L per closed (SELL) trade, keyed by fill id.
 
     Replays the fills, oldest first, through a scratch `Portfolio` — the
     same average-cost accounting `PaperBroker` uses live — rather than
@@ -28,14 +28,24 @@ def compute_trade_pnl(trades: list[Fill]) -> list[float]:
     unlimited cash since it exists purely to recover each fill's realized
     P&L, not to validate affordability (that already happened when the
     trade was actually placed).
+
+    Keying by fill id (rather than just returning a plain list, as
+    `compute_trade_pnl` does) lets a caller match each P&L figure back to
+    *which* trade it belongs to -- e.g. a daily report showing today's
+    closed trades alongside their realized gain/loss.
     """
     ledger = Portfolio(cash=float("inf"))
-    realized: list[float] = []
+    realized: dict[str, float] = {}
     for fill in sorted(trades, key=lambda f: f.timestamp):
         pnl = ledger.apply_fill(fill)
         if fill.side == OrderSide.SELL:
-            realized.append(pnl)
+            realized[fill.id] = pnl
     return realized
+
+
+def compute_trade_pnl(trades: list[Fill]) -> list[float]:
+    """Realized P&L per closed (SELL) trade, in chronological order. See `compute_realized_pnl_by_fill`."""
+    return list(compute_realized_pnl_by_fill(trades).values())
 
 
 def daily_returns(equity_curve: pd.Series) -> pd.Series:

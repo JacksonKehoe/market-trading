@@ -6,6 +6,7 @@ from app.reporting.metrics import (
     average_loss,
     cagr,
     compute_metrics,
+    compute_realized_pnl_by_fill,
     compute_trade_pnl,
     daily_returns,
     expectancy,
@@ -15,6 +16,7 @@ from app.reporting.metrics import (
     total_return,
     win_rate,
 )
+from app.reporting.positions import position_rows
 from app.reporting.report_generator import generate_backtest_report
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "PerformanceMetrics",
     "compute_metrics",
     "compute_trade_pnl",
+    "compute_realized_pnl_by_fill",
     "daily_returns",
     "total_return",
     "cagr",
@@ -36,5 +39,6 @@ __all__ = [
     "average_loss",
     "profit_factor",
     "expectancy",
+    "position_rows",
     "generate_backtest_report",
 ]
