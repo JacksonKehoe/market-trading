@@ -11,7 +11,7 @@ strategies with virtual money before any real capital is ever risked.
 
 ## Status
 
-Phase 4 — strategies & indicators. See [Development Phases](#development-phases).
+Phase 5 — backtesting & reporting. See [Development Phases](#development-phases).
 
 ## Quickstart
 
@@ -21,7 +21,14 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env         # optional — sensible defaults work with no .env at all
 pytest
+
+python run_backtest.py --symbols AAPL,MSFT --strategy sma --start 2024-01-01 --end 2025-06-01 --benchmark SPY
 ```
+
+`run_backtest.py` fetches real historical data (via `yfinance`), replays
+the chosen strategy (`sma` / `rsi` / `macd`) through the paper trading
+engine, prints a performance summary, and saves a self-contained HTML
+report to `reports/`. It never places a real trade.
 
 ## Architecture
 
@@ -42,10 +49,19 @@ execution                     (broker interface + PaperBroker; enforces risk, up
         │
 database                      (SQLAlchemy persistence; converts to/from models/domain.py)
         │
-reporting, email, dashboard    (read from database + portfolio; produce output)
+reporting                     (backtester replays strategies through execution;
+        │                       + analytics, charts, HTML reports)
+        │
+email, dashboard               (read from database + reporting; produce output)
         │
 scheduler                     (top-level orchestration; wires everything together)
 ```
+
+`reporting` sits above `execution` for a specific reason: its `Backtester`
+doesn't reimplement trading logic, it *replays* historical data through
+the real `PaperBroker`/`RiskManager`/`ExecutionEngine` — so it necessarily
+depends on everything below it (`data`, `strategies`, `portfolio`, `risk`,
+`execution`), not just `models`/`database` as earlier phases anticipated.
 
 | Module | Responsibility | Depends on |
 |---|---|---|
@@ -59,7 +75,7 @@ scheduler                     (top-level orchestration; wires everything togethe
 | `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
 | `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord`); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
-| `app/reporting` | (later phase) Performance analytics (Sharpe, drawdown, CAGR, win rate, ...), backtesting, and Plotly chart generation. | `models`, `database` |
+| `app/reporting` | `Backtester` replays a `Strategy` across a watchlist and date range through the *real* `PaperBroker`/`RiskManager`/`ExecutionEngine` via `ReplayMarketDataProvider` (serves data "as of" a simulated date so nothing can see the future) — a backtest is the live paper-trading pipeline fed historical bars, not a separate simulation. `metrics.py` computes total return, CAGR, Sharpe, max drawdown, win rate, average gain/loss, profit factor, and expectancy from an equity curve + trade list (`compute_trade_pnl` reconstructs per-trade realized P&L by replaying fills through a scratch `Portfolio`). `charts.py` builds Plotly equity-curve and drawdown figures; `report_generator.py` renders them into a self-contained HTML file via Jinja2 and saves it to `reports/`. | `models`, `data`, `strategies`, `portfolio`, `risk`, `execution`, `database` |
 | `app/email` | (later phase) Jinja2 HTML report templates + SMTP sending, entirely optional (disabled unless `EMAIL_*` env vars are set). | `reporting` |
 | `app/scheduler` | (later phase) APScheduler jobs (morning/evening/hourly) that orchestrate data refresh → strategy scan → risk-checked paper trades → report generation → optional email. | everything above |
 | `app/dashboard` | (later phase) Lightweight local read-only view of portfolio/trades/signals. | `database`, `reporting` |
@@ -124,6 +140,26 @@ scheduler                     (top-level orchestration; wires everything togethe
   `RiskManager` already refuses to re-buy a symbol it's holding, but
   edge-triggering is the more standard, portable definition of
   "crossover" and doesn't rely on that downstream guard to behave correctly.
+- **A backtest is a replay through the real engine, not a parallel
+  simulation.** `Backtester.run` constructs a `PaperBroker` +
+  `RiskManager` + `ExecutionEngine` exactly like live paper trading would,
+  swapping in a `ReplayMarketDataProvider` that only ever reveals data up
+  to the simulated "current date." This means strategy behavior, risk
+  enforcement (including stop-loss/take-profit and the daily loss limit),
+  and fill/commission accounting are identical in backtest and paper
+  trading by construction — there's no second code path to keep in sync.
+- **`Portfolio.apply_fill` returns the realized P&L for that fill.**
+  Reporting's `compute_trade_pnl` reuses this (via a scratch `Portfolio`
+  seeded with unlimited cash, since it's reconstructing accounting
+  history rather than validating affordability) instead of
+  re-implementing average-cost math to get per-trade P&L for win
+  rate/profit factor/expectancy — one source of truth for "how is
+  realized P&L computed."
+- **Chart builders return `Figure` objects; they don't know about files,
+  HTML, or Jinja2.** `report_generator.py` is the only place that decides
+  a report is a single self-contained HTML file (Plotly's JS pulled from
+  a CDN once and reused across charts) — charts or the metrics themselves
+  could be reused by the dashboard or email reports later without change.
 
 ## Project layout
 
@@ -145,7 +181,9 @@ app/
 │                                        — BrokerInterface, PaperBroker, ExecutionEngine
 ├── database/     engine.py, orm_models.py, repository.py
 │                                        — SQLAlchemy engine/session + SqlTradeRepository
-├── reporting/                           — analytics, backtesting, charts
+├── reporting/    backtest.py, metrics.py, charts.py, report_generator.py, templates/
+│                                        — Backtester, PerformanceMetrics, Plotly charts,
+│                                          HTML report generation
 ├── email/                               — Jinja2 templates + SMTP sender
 ├── scheduler/                           — APScheduler jobs
 └── dashboard/                           — local read-only dashboard
@@ -153,6 +191,7 @@ database/         SQLite file + on-disk market-data cache (gitignored)
 logs/             app.log, trades.log, errors.log, scheduler.log, market_data.log (gitignored)
 reports/          generated HTML/chart output (gitignored)
 tests/            pytest suite
+run_backtest.py   CLI entrypoint: python run_backtest.py --symbols AAPL,MSFT --strategy sma
 ```
 
 ## Configuration
@@ -171,9 +210,9 @@ working default, so the app runs with no `.env` file at all.
 2. **Paper trading engine** — `PaperBroker`, `Portfolio`,
    `RiskManager`, `ExecutionEngine`, ORM persistence for trades/positions.
 3. **Market data** — `yfinance` provider + on-disk cache, watchlist loading.
-4. **Strategies & indicators** *(this phase)* — SMA/EMA/RSI/MACD, Moving Average
+4. **Strategies & indicators** — SMA/EMA/RSI/MACD, Moving Average
    Crossover / RSI / MACD strategies.
-5. **Backtesting & reporting** — `run_backtest.py`, performance metrics
+5. **Backtesting & reporting** *(this phase)* — `run_backtest.py`, performance metrics
    (Sharpe, CAGR, drawdown, ...), equity curve + benchmark charts.
 6. **Scheduler, email reports, dashboard** — morning/evening jobs, HTML
    email reports, local dashboard.

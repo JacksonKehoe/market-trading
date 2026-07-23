@@ -27,6 +27,30 @@ class FakeMarketDataProvider(MarketDataProvider):
         self._prices[symbol] = price
 
 
+class FakeHistoricalMarketDataProvider(MarketDataProvider):
+    """Serves preset historical OHLCV DataFrames — for backtest-style tests.
+
+    Unlike `FakeMarketDataProvider` (always-empty history, fixed live
+    price), this one actually has history to replay: `get_latest_price`
+    returns the last close in the stored frame.
+    """
+
+    def __init__(self, history: dict[str, pd.DataFrame]) -> None:
+        self._history = history
+
+    def get_history(
+        self, symbol: str, start: datetime, end: datetime, interval: str = "1d"
+    ) -> pd.DataFrame:
+        data = self._history.get(symbol, pd.DataFrame(columns=["open", "high", "low", "close", "volume"]))
+        return data.loc[start:end]
+
+    def get_latest_price(self, symbol: str) -> float:
+        data = self._history.get(symbol)
+        if data is None or data.empty:
+            raise ValueError(f"No data available for {symbol!r}")
+        return float(data["close"].iloc[-1])
+
+
 def make_price_frame(closes: list[float], start: str = "2026-01-01") -> pd.DataFrame:
     """Build a minimal OHLCV DataFrame from a list of closing prices.
 

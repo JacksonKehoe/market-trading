@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Backtest Report — {{ strategy_name }}</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 2rem auto;
+    max-width: 1000px;
+    color: #1a1a1a;
+    background: #fafafa;
+  }
+  h1, h2 { color: #111; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; background: white; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
+  th { background: #f0f0f0; }
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .metric-card { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; }
+  .metric-label { font-size: 0.75rem; color: #666; text-transform: uppercase; letter-spacing: 0.03em; }
+  .metric-value { font-size: 1.4rem; font-weight: 600; margin-top: 0.25rem; }
+  .positive { color: #0a7d2c; }
+  .negative { color: #c0362c; }
+  .disclaimer {
+    background: #fff3cd;
+    border: 1px solid #ffe08a;
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+  .chart-container { margin-bottom: 2rem; background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0.5rem; }
+</style>
+</head>
+<body>
+  <div class="disclaimer">
+    Simulated (paper trading) backtest results only. No real trades were placed and no brokerage was contacted.
+  </div>
+
+  <h1>Backtest Report</h1>
+  <p>
+    <strong>Strategy:</strong> {{ strategy_name }} &nbsp;|&nbsp;
+    <strong>Symbols:</strong> {{ symbols | join(", ") }} &nbsp;|&nbsp;
+    <strong>Period:</strong> {{ start.strftime("%Y-%m-%d") }} to {{ end.strftime("%Y-%m-%d") }} &nbsp;|&nbsp;
+    <strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
+  </p>
+
+  <h2>Performance Summary</h2>
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-label">Total Return</div>
+      <div class="metric-value {{ 'positive' if metrics.total_return_pct >= 0 else 'negative' }}">{{ "%.2f"|format(metrics.total_return_pct) }}%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">CAGR</div>
+      <div class="metric-value {{ 'positive' if metrics.cagr_pct >= 0 else 'negative' }}">{{ "%.2f"|format(metrics.cagr_pct) }}%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Sharpe Ratio</div>
+      <div class="metric-value">{{ "%.2f"|format(metrics.sharpe_ratio) }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Max Drawdown</div>
+      <div class="metric-value negative">{{ "%.2f"|format(metrics.max_drawdown_pct) }}%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Win Rate</div>
+      <div class="metric-value">{{ "%.1f"|format(metrics.win_rate_pct) }}%</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Closed Trades</div>
+      <div class="metric-value">{{ metrics.num_trades }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Avg Gain</div>
+      <div class="metric-value positive">${{ "%.2f"|format(metrics.average_gain) }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Avg Loss</div>
+      <div class="metric-value negative">${{ "%.2f"|format(metrics.average_loss) }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Profit Factor</div>
+      <div class="metric-value">{{ profit_factor_display }}</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Expectancy</div>
+      <div class="metric-value">${{ "%.2f"|format(metrics.expectancy) }}</div>
+    </div>
+  </div>
+
+  <h2>Equity Curve</h2>
+  <div class="chart-container">{{ equity_chart_html | safe }}</div>
+
+  <h2>Drawdown</h2>
+  <div class="chart-container">{{ drawdown_chart_html | safe }}</div>
+
+  <h2>Trade History ({{ trades | length }} fills)</h2>
+  <table>
+    <thead>
+      <tr><th>Date</th><th>Symbol</th><th>Side</th><th>Quantity</th><th>Price</th><th>Commission</th></tr>
+    </thead>
+    <tbody>
+    {% for trade in trades %}
+      <tr>
+        <td>{{ trade.timestamp.strftime("%Y-%m-%d") }}</td>
+        <td>{{ trade.symbol }}</td>
+        <td>{{ trade.side.value }}</td>
+        <td>{{ trade.quantity }}</td>
+        <td>${{ "%.2f"|format(trade.price) }}</td>
+        <td>${{ "%.2f"|format(trade.commission) }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6">No trades were executed.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>

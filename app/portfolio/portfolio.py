@@ -60,8 +60,13 @@ class Portfolio:
     def to_account(self, prices: dict[str, float], timestamp: datetime) -> Account:
         return Account(timestamp=timestamp, cash=self.cash, positions_value=self.positions_value(prices))
 
-    def apply_fill(self, fill: Fill) -> None:
+    def apply_fill(self, fill: Fill) -> float:
         """Update cash/positions/realized P&L for a completed trade.
+
+        Returns the P&L realized *by this specific fill* (always 0.0 for a
+        BUY; the closed-out gain/loss for a SELL). Reporting uses this to
+        reconstruct per-trade P&L for win rate / profit factor / etc.
+        without duplicating this accounting logic elsewhere.
 
         Raises `InsufficientFundsError` / `InsufficientSharesError` rather
         than silently clamping — callers (PaperBroker) should never be
@@ -70,8 +75,8 @@ class Portfolio:
         """
         if fill.side == OrderSide.BUY:
             self._apply_buy(fill)
-        else:
-            self._apply_sell(fill)
+            return 0.0
+        return self._apply_sell(fill)
 
     def _apply_buy(self, fill: Fill) -> None:
         cost = fill.quantity * fill.price + fill.commission
@@ -96,7 +101,7 @@ class Portfolio:
             ) / total_quantity
             existing.quantity = total_quantity
 
-    def _apply_sell(self, fill: Fill) -> None:
+    def _apply_sell(self, fill: Fill) -> float:
         existing = self.positions.get(fill.symbol)
         if existing is None or existing.quantity < fill.quantity - _EPSILON:
             held = 0.0 if existing is None else existing.quantity
@@ -105,7 +110,9 @@ class Portfolio:
             )
         proceeds = fill.quantity * fill.price - fill.commission
         self.cash += proceeds
-        self.realized_pl += (fill.price - existing.avg_entry_price) * fill.quantity - fill.commission
+        realized = (fill.price - existing.avg_entry_price) * fill.quantity - fill.commission
+        self.realized_pl += realized
         existing.quantity -= fill.quantity
         if existing.quantity <= _EPSILON:
             del self.positions[fill.symbol]
+        return realized
