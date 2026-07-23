@@ -26,6 +26,10 @@ def _split_watchlist(raw: str) -> list[str]:
     return [symbol.strip().upper() for symbol in raw.split(",") if symbol.strip()]
 
 
+def _split_strategies(raw: str) -> list[str]:
+    return [name.strip().lower() for name in raw.split(",") if name.strip()]
+
+
 def _bool(raw: str) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -69,8 +73,13 @@ class Settings:
     commission_per_trade: float = 0.0
 
     # Live/scheduled paper trading
-    strategy: str = "sma"
-    """Which Strategy the scheduler/dashboard use, by name (see app.strategies.factory)."""
+    strategies: list[str] = field(default_factory=lambda: ["sma", "rsi", "macd"])
+    """Which Strategies the scheduler/dashboard run, by name (see app.strategies.factory).
+
+    Each one gets its own independent simulated account (same starting
+    capital, same watchlist) so their results are directly comparable --
+    not one account split across strategies.
+    """
 
     @property
     def database_url(self) -> str:
@@ -104,7 +113,7 @@ def get_settings() -> Settings:
         email_to=os.getenv("EMAIL_TO", ""),
         smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com"),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),
-        morning_report_time=os.getenv("MORNING_REPORT_TIME", "08:00"),
+        morning_report_time=os.getenv("MORNING_REPORT_TIME", "09:00"),
         evening_report_time=os.getenv("EVENING_REPORT_TIME", "17:30"),
         hourly_scan_enabled=_bool(os.getenv("HOURLY_SCAN_ENABLED", "false")),
         max_position_size_pct=float(os.getenv("MAX_POSITION_SIZE_PCT", "0.10")),
@@ -114,5 +123,5 @@ def get_settings() -> Settings:
         daily_loss_limit_pct=float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.03")),
         max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "10")),
         commission_per_trade=float(os.getenv("COMMISSION_PER_TRADE", "0.0")),
-        strategy=os.getenv("STRATEGY", "sma"),
+        strategies=_split_strategies(os.getenv("STRATEGIES", os.getenv("STRATEGY", "sma,rsi,macd"))),
     )

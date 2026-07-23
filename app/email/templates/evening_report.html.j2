@@ -26,37 +26,39 @@
   <div class="disclaimer">Paper trading only. All figures reflect simulated positions -- no real trades were placed.</div>
 
   <h1>Evening Trading Report</h1>
-  <p>
-    <strong>Strategy:</strong> {{ strategy_name }} &nbsp;|&nbsp;
-    <strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
-  </p>
+  <p><strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
 
-  <h2>Account</h2>
-  <div class="summary-grid">
-    <div class="summary-card"><div class="summary-label">Portfolio Value</div><div class="summary-value">${{ "%.2f"|format(portfolio_value) }}</div></div>
-    <div class="summary-card"><div class="summary-label">Cash</div><div class="summary-value">${{ "%.2f"|format(cash) }}</div></div>
-    <div class="summary-card">
-      <div class="summary-label">Day P/L</div>
-      <div class="summary-value {{ 'positive' if day_pl >= 0 else 'negative' }}">${{ "%.2f"|format(day_pl) }} ({{ "%.2f"|format(day_pl_pct) }}%)</div>
-    </div>
-    <div class="summary-card"><div class="summary-label">Open Positions</div><div class="summary-value">{{ positions | length }}</div></div>
-  </div>
+  <h2>Strategy Comparison</h2>
+  <table>
+    <thead><tr><th>Strategy</th><th>Equity</th><th>Cash</th><th>Day P/L</th><th>Open Positions</th></tr></thead>
+    <tbody>
+    {% for c in comparison %}
+      <tr>
+        <td>{{ c.strategy }}</td>
+        <td>${{ "%.2f"|format(c.equity) }}</td>
+        <td>${{ "%.2f"|format(c.cash) }}</td>
+        <td class="{{ 'positive' if c.day_pl >= 0 else 'negative' }}">${{ "%.2f"|format(c.day_pl) }} ({{ "%.2f"|format(c.day_pl_pct) }}%)</td>
+        <td>{{ c.open_positions }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 
-  {% if best_performer or worst_performer %}
-  <h2>Best / Worst Performer</h2>
+  {% if best_strategy or worst_strategy %}
+  <h2>Best / Worst Strategy Today</h2>
   <div class="summary-grid">
     <div class="summary-card">
-      <div class="summary-label">Best Performer</div>
-      {% if best_performer %}
-        <div class="summary-value positive">{{ best_performer.symbol }} ({{ "%.2f"|format(best_performer.unrealized_pl_pct) }}%)</div>
+      <div class="summary-label">Best Strategy</div>
+      {% if best_strategy %}
+        <div class="summary-value positive">{{ best_strategy.strategy }} ({{ "%.2f"|format(best_strategy.day_pl_pct) }}%)</div>
       {% else %}
         <div class="summary-value">N/A</div>
       {% endif %}
     </div>
     <div class="summary-card">
-      <div class="summary-label">Worst Performer</div>
-      {% if worst_performer %}
-        <div class="summary-value negative">{{ worst_performer.symbol }} ({{ "%.2f"|format(worst_performer.unrealized_pl_pct) }}%)</div>
+      <div class="summary-label">Worst Strategy</div>
+      {% if worst_strategy %}
+        <div class="summary-value negative">{{ worst_strategy.strategy }} ({{ "%.2f"|format(worst_strategy.day_pl_pct) }}%)</div>
       {% else %}
         <div class="summary-value">N/A</div>
       {% endif %}
@@ -64,7 +66,7 @@
   </div>
   {% endif %}
 
-  <h2>Equity Curve</h2>
+  <h2>Equity Curves</h2>
   {% if equity_chart_html %}
     <div class="chart-container">{{ equity_chart_html | safe }}</div>
   {% else %}
@@ -73,10 +75,11 @@
 
   <h2>Trades Executed Today</h2>
   <table>
-    <thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Realized P/L</th></tr></thead>
+    <thead><tr><th>Strategy</th><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Realized P/L</th></tr></thead>
     <tbody>
     {% for t in trades_today %}
       <tr>
+        <td>{{ t.strategy }}</td>
         <td>{{ t.fill.timestamp.strftime("%H:%M") }}</td>
         <td>{{ t.fill.symbol }}</td>
         <td class="{{ 'buy' if t.fill.side.value == 'BUY' else 'sell' }}">{{ t.fill.side.value }}</td>
@@ -85,17 +88,18 @@
         <td>{% if t.pnl is not none %}<span class="{{ 'positive' if t.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(t.pnl) }}</span>{% else %}—{% endif %}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6">No trades executed today.</td></tr>
+      <tr><td colspan="7">No trades executed today.</td></tr>
     {% endfor %}
     </tbody>
   </table>
 
   <h2>Open Positions</h2>
   <table>
-    <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead>
+    <thead><tr><th>Strategy</th><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead>
     <tbody>
     {% for p in positions %}
       <tr>
+        <td>{{ p.strategy }}</td>
         <td>{{ p.symbol }}</td>
         <td>{{ p.quantity }}</td>
         <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
@@ -103,18 +107,26 @@
         <td class="{{ 'positive' if p.unrealized_pl >= 0 else 'negative' }}">${{ "%.2f"|format(p.unrealized_pl) }} ({{ "%.2f"|format(p.unrealized_pl_pct) }}%)</td>
       </tr>
     {% else %}
-      <tr><td colspan="5">No open positions.</td></tr>
+      <tr><td colspan="6">No open positions.</td></tr>
     {% endfor %}
     </tbody>
   </table>
 
   <h2>Risk Summary</h2>
-  <div class="summary-grid">
-    <div class="summary-card"><div class="summary-label">Allocation</div><div class="summary-value">{{ "%.1f"|format(risk_summary.allocation_pct) }}%</div></div>
-    <div class="summary-card"><div class="summary-label">Open / Max Positions</div><div class="summary-value">{{ risk_summary.open_positions }} / {{ risk_summary.max_open_positions }}</div></div>
-    <div class="summary-card"><div class="summary-label">Cash Reserve</div><div class="summary-value">{{ "%.1f"|format(risk_summary.cash_reserve_pct) }}%</div></div>
-    <div class="summary-card"><div class="summary-label">Stop Loss / Take Profit</div><div class="summary-value">{{ "%.0f"|format((risk_summary.stop_loss_pct or 0) * 100) }}% / {{ "%.0f"|format((risk_summary.take_profit_pct or 0) * 100) }}%</div></div>
-  </div>
+  <p>Shared limits: stop loss {{ "%.0f"|format((risk_limits.stop_loss_pct or 0) * 100) }}%, take profit {{ "%.0f"|format((risk_limits.take_profit_pct or 0) * 100) }}%, max open positions {{ risk_limits.max_open_positions }}.</p>
+  <table>
+    <thead><tr><th>Strategy</th><th>Allocation</th><th>Open / Max Positions</th><th>Cash Reserve</th></tr></thead>
+    <tbody>
+    {% for r in risk_summary %}
+      <tr>
+        <td>{{ r.strategy }}</td>
+        <td>{{ "%.1f"|format(r.allocation_pct) }}%</td>
+        <td>{{ r.open_positions }} / {{ r.max_open_positions }}</td>
+        <td>{{ "%.1f"|format(r.cash_reserve_pct) }}%</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 
   <h2>Strategy Recommendations</h2>
   <ul class="recs">
@@ -124,6 +136,6 @@
   </ul>
 
   <h2>Next Day's Watchlist</h2>
-  <p>{{ next_watchlist | join(", ") if next_watchlist else "All watchlist symbols are currently held." }}</p>
+  <p>{{ next_watchlist | join(", ") }}</p>
 </body>
 </html>

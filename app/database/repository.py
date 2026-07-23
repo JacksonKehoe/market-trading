@@ -4,6 +4,13 @@
 structurally (matching method signatures, no shared base class) so that
 `ExecutionEngine` can persist through it without this module — or
 SQLAlchemy — being a dependency of the execution layer.
+
+Positions and account snapshots are scoped by `strategy_name`: each
+strategy trades its own independent simulated account (see
+`app.scheduler.context`), so two strategies can each hold a position in
+the same symbol, or have entirely different equity curves, at once.
+Trades were already tagged with `strategy_name` (via `Order.strategy_name`)
+since Phase 2, so `save_fill`/`list_trades` didn't need to change shape.
 """
 
 from __future__ import annotations
@@ -41,15 +48,16 @@ class SqlTradeRepository:
                     timestamp=fill.timestamp,
                 )
             )
-            self._upsert_position(session, fill)
+            self._upsert_position(session, fill, order.strategy_name)
             session.commit()
 
-    def _upsert_position(self, session: Session, fill: Fill) -> None:
-        record = session.get(PositionRecord, fill.symbol)
+    def _upsert_position(self, session: Session, fill: Fill, strategy_name: str) -> None:
+        record = session.get(PositionRecord, (strategy_name, fill.symbol))
         if fill.side == OrderSide.BUY:
             if record is None:
                 session.add(
                     PositionRecord(
+                        strategy_name=strategy_name,
                         symbol=fill.symbol,
                         quantity=fill.quantity,
                         avg_entry_price=fill.price,
@@ -71,10 +79,11 @@ class SqlTradeRepository:
                 if record.quantity <= _EPSILON:
                     session.delete(record)
 
-    def save_account_snapshot(self, account: Account) -> None:
+    def save_account_snapshot(self, account: Account, strategy_name: str) -> None:
         with self._session_factory() as session:
             session.add(
                 AccountSnapshotRecord(
+                    strategy_name=strategy_name,
                     timestamp=account.timestamp,
                     cash=account.cash,
                     positions_value=account.positions_value,
@@ -83,16 +92,20 @@ class SqlTradeRepository:
             )
             session.commit()
 
-    def list_trades(self, symbol: str | None = None, since: datetime | None = None) -> list[Fill]:
+    def list_trades(
+        self, symbol: str | None = None, since: datetime | None = None, strategy_name: str | None = None
+    ) -> list[Fill]:
         with self._session_factory() as session:
             query = session.query(TradeRecord)
             if symbol is not None:
                 query = query.filter_by(symbol=symbol)
             if since is not None:
                 query = query.filter(TradeRecord.timestamp >= since)
+            if strategy_name is not None:
+                query = query.filter_by(strategy_name=strategy_name)
             return [self._to_fill(record) for record in query.order_by(TradeRecord.timestamp).all()]
 
-    def list_open_positions(self) -> list[Position]:
+    def list_open_positions(self, strategy_name: str) -> list[Position]:
         with self._session_factory() as session:
             return [
                 Position(
@@ -101,28 +114,29 @@ class SqlTradeRepository:
                     avg_entry_price=record.avg_entry_price,
                     opened_at=record.opened_at,
                 )
-                for record in session.query(PositionRecord).all()
+                for record in session.query(PositionRecord).filter_by(strategy_name=strategy_name).all()
             ]
 
-    def latest_cash_balance(self) -> float | None:
-        """Cash from the most recent account snapshot, or `None` if none exists yet.
+    def latest_cash_balance(self, strategy_name: str) -> float | None:
+        """Cash from the most recent account snapshot for `strategy_name`, or `None` if none exists yet.
 
-        Used on startup to resume a paper trading account across process
-        restarts instead of silently resetting to `INITIAL_CAPITAL` every
-        time the scheduler or dashboard starts.
+        Used on startup to resume a strategy's paper trading account
+        across process restarts instead of silently resetting to
+        `INITIAL_CAPITAL` every time the scheduler or dashboard starts.
         """
         with self._session_factory() as session:
             record = (
                 session.query(AccountSnapshotRecord)
+                .filter_by(strategy_name=strategy_name)
                 .order_by(AccountSnapshotRecord.timestamp.desc())
                 .first()
             )
             return None if record is None else record.cash
 
-    def equity_curve(self, since: datetime | None = None) -> pd.Series:
-        """Persisted equity snapshots as a `pandas.Series` indexed by timestamp."""
+    def equity_curve(self, strategy_name: str, since: datetime | None = None) -> pd.Series:
+        """Persisted equity snapshots for `strategy_name` as a `pandas.Series` indexed by timestamp."""
         with self._session_factory() as session:
-            query = session.query(AccountSnapshotRecord)
+            query = session.query(AccountSnapshotRecord).filter_by(strategy_name=strategy_name)
             if since is not None:
                 query = query.filter(AccountSnapshotRecord.timestamp >= since)
             records = query.order_by(AccountSnapshotRecord.timestamp).all()

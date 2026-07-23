@@ -29,15 +29,21 @@ class TradeRecord(Base):
     quantity: Mapped[float] = mapped_column(Float)
     price: Mapped[float] = mapped_column(Float)
     commission: Mapped[float] = mapped_column(Float, default=0.0)
-    strategy_name: Mapped[str] = mapped_column(String, default="")
+    strategy_name: Mapped[str] = mapped_column(String, default="", index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
 class PositionRecord(Base):
-    """Current open positions, kept in sync (upserted/deleted) on every fill."""
+    """Current open positions, kept in sync (upserted/deleted) on every fill.
+
+    Primary key is `(strategy_name, symbol)`, not just `symbol`: each
+    strategy trades its own independent simulated account, so two
+    strategies can each hold their own position in the same symbol at once.
+    """
 
     __tablename__ = "positions"
 
+    strategy_name: Mapped[str] = mapped_column(String, primary_key=True)
     symbol: Mapped[str] = mapped_column(String, primary_key=True)
     quantity: Mapped[float] = mapped_column(Float)
     avg_entry_price: Mapped[float] = mapped_column(Float)
@@ -46,11 +52,12 @@ class PositionRecord(Base):
 
 
 class AccountSnapshotRecord(Base):
-    """A point-in-time (cash, positions_value, equity) snapshot for the equity curve."""
+    """A point-in-time (cash, positions_value, equity) snapshot for one strategy's equity curve."""
 
     __tablename__ = "account_snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_name: Mapped[str] = mapped_column(String, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, index=True)
     cash: Mapped[float] = mapped_column(Float)
     positions_value: Mapped[float] = mapped_column(Float)

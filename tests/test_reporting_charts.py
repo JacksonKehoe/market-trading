@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from app.reporting.charts import build_drawdown_chart, build_equity_curve_chart
+from app.reporting.charts import build_drawdown_chart, build_equity_curve_chart, build_multi_equity_curve_chart
 
 
 def _curve(values: list[float]) -> pd.Series:
@@ -40,3 +40,22 @@ def test_drawdown_chart_reflects_known_drawdown() -> None:
 def test_drawdown_chart_raises_on_empty_series() -> None:
     with pytest.raises(ValueError):
         build_drawdown_chart(pd.Series(dtype=float))
+
+
+def test_multi_equity_curve_chart_has_one_trace_per_strategy() -> None:
+    fig = build_multi_equity_curve_chart(
+        {"sma": _curve([100.0, 105.0]), "rsi": _curve([100.0, 98.0]), "macd": _curve([100.0, 110.0])}
+    )
+    assert len(fig.data) == 3
+    assert {trace.name for trace in fig.data} == {"sma", "rsi", "macd"}
+
+
+def test_multi_equity_curve_chart_skips_empty_series() -> None:
+    fig = build_multi_equity_curve_chart({"sma": _curve([100.0, 105.0]), "rsi": pd.Series(dtype=float)})
+    assert len(fig.data) == 1
+    assert fig.data[0].name == "sma"
+
+
+def test_multi_equity_curve_chart_raises_when_all_series_empty() -> None:
+    with pytest.raises(ValueError):
+        build_multi_equity_curve_chart({"sma": pd.Series(dtype=float), "rsi": pd.Series(dtype=float)})

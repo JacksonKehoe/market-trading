@@ -109,7 +109,7 @@ class Backtester:
         replay_provider = ReplayMarketDataProvider(history)
         broker = PaperBroker(self.initial_capital, replay_provider, self.commission_per_trade)
         risk_manager = RiskManager(self.risk_limits)
-        engine = ExecutionEngine(broker, replay_provider, risk_manager)
+        engine = ExecutionEngine(broker, replay_provider, risk_manager, strategy_name=strategy.name)
 
         trades: list[Fill] = []
         equity_by_date: dict[pd.Timestamp, float] = {}

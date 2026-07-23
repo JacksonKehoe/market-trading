@@ -30,11 +30,13 @@ class ExecutionEngine:
         data_provider: MarketDataProvider,
         risk_manager: RiskManager,
         repository: TradeRepository | None = None,
+        strategy_name: str = "",
     ) -> None:
         self.broker = broker
         self.data_provider = data_provider
         self.risk_manager = risk_manager
         self.repository = repository
+        self.strategy_name = strategy_name
         self._daily_start_equity: float | None = None
 
     def start_new_trading_day(self) -> None:
@@ -85,6 +87,6 @@ class ExecutionEngine:
 
         if self.repository is not None:
             self.repository.save_fill(fill, order)
-            self.repository.save_account_snapshot(self.broker.get_account())
+            self.repository.save_account_snapshot(self.broker.get_account(), self.strategy_name)
 
         return fill

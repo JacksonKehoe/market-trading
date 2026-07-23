@@ -1,5 +1,5 @@
 from app.reporting.backtest import Backtester, BacktestResult, ReplayMarketDataProvider
-from app.reporting.charts import build_drawdown_chart, build_equity_curve_chart
+from app.reporting.charts import build_drawdown_chart, build_equity_curve_chart, build_multi_equity_curve_chart
 from app.reporting.metrics import (
     PerformanceMetrics,
     average_gain,
@@ -24,6 +24,7 @@ __all__ = [
     "BacktestResult",
     "ReplayMarketDataProvider",
     "build_equity_curve_chart",
+    "build_multi_equity_curve_chart",
     "build_drawdown_chart",
     "PerformanceMetrics",
     "compute_metrics",

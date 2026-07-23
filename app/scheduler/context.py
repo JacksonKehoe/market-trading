@@ -3,8 +3,17 @@
 This is the live-trading counterpart to `app.reporting.backtest.Backtester`:
 same `PaperBroker` + `RiskManager` + `ExecutionEngine`, but persisted to
 the real database and rehydrated from it on startup, so restarting the
-scheduler doesn't silently reset the paper account back to
-`INITIAL_CAPITAL` and lose all open positions.
+scheduler doesn't silently reset a strategy's paper account back to
+`INITIAL_CAPITAL` and lose its open positions.
+
+Each configured strategy (`Settings.strategies`) gets its own
+`TradingContext` -- its own `PaperBroker`/`Portfolio`, starting from the
+same `INITIAL_CAPITAL`, trading the same watchlist. They share one
+`MarketDataProvider` (so its cache is shared instead of duplicated) and
+one `SqlTradeRepository`, but their account state is kept completely
+separate by `strategy_name` at the persistence layer -- see
+`app.database.repository`. That's what makes their results directly
+comparable: same starting conditions, independent outcomes.
 """
 
 from __future__ import annotations
@@ -37,22 +46,36 @@ class TradingContext:
     risk_limits: RiskLimits
 
 
-def build_trading_context(settings: Settings | None = None) -> TradingContext:
+def build_trading_context(
+    settings: Settings | None = None,
+    strategy_name: str | None = None,
+    data_provider: MarketDataProvider | None = None,
+    repository: SqlTradeRepository | None = None,
+) -> TradingContext:
+    """Build a `TradingContext` for one strategy.
+
+    `data_provider`/`repository` can be supplied so multiple contexts
+    (see `build_trading_contexts`) share the same cache and DB session
+    factory instead of each constructing its own.
+    """
     settings = settings or get_settings()
     init_db(settings)
 
-    data_provider = build_market_data_provider(settings)
-    repository = SqlTradeRepository(get_session_factory(settings))
+    data_provider = data_provider or build_market_data_provider(settings)
+    repository = repository or SqlTradeRepository(get_session_factory(settings))
+    strategy = build_strategy(strategy_name or (settings.strategies[0] if settings.strategies else "sma"))
 
-    initial_cash = repository.latest_cash_balance()
+    initial_cash = repository.latest_cash_balance(strategy.name)
     if initial_cash is None:
         initial_cash = settings.initial_capital
 
     broker = PaperBroker(initial_cash, data_provider, settings.commission_per_trade)
-    broker.portfolio.positions = {p.symbol: p for p in repository.list_open_positions()}
+    broker.portfolio.positions = {p.symbol: p for p in repository.list_open_positions(strategy.name)}
 
     risk_limits = RiskLimits.from_settings(settings)
-    engine = ExecutionEngine(broker, data_provider, RiskManager(risk_limits), repository)
+    engine = ExecutionEngine(
+        broker, data_provider, RiskManager(risk_limits), repository, strategy_name=strategy.name
+    )
 
     return TradingContext(
         settings=settings,
@@ -60,7 +83,22 @@ def build_trading_context(settings: Settings | None = None) -> TradingContext:
         repository=repository,
         broker=broker,
         engine=engine,
-        strategy=build_strategy(settings.strategy),
+        strategy=strategy,
         watchlist=load_watchlist(settings),
         risk_limits=risk_limits,
     )
+
+
+def build_trading_contexts(settings: Settings | None = None) -> list[TradingContext]:
+    """One `TradingContext` per `Settings.strategies` entry, sharing a data provider and repository."""
+    settings = settings or get_settings()
+    init_db(settings)
+
+    data_provider = build_market_data_provider(settings)
+    repository = SqlTradeRepository(get_session_factory(settings))
+
+    names = settings.strategies or ["sma"]
+    return [
+        build_trading_context(settings, strategy_name=name, data_provider=data_provider, repository=repository)
+        for name in names
+    ]

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from app.reporting.charts import build_equity_curve_chart
+from app.reporting.charts import build_multi_equity_curve_chart
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -27,14 +27,14 @@ def render_morning_report(context: dict) -> str:
 
 
 def render_evening_report(context: dict) -> str:
-    equity_curve = context.get("equity_curve")
+    equity_curves = context.get("equity_curves") or {}
     equity_chart_html = None
-    if equity_curve is not None and not equity_curve.empty:
-        equity_chart_html = build_equity_curve_chart(equity_curve).to_html(
+    if any(not series.empty for series in equity_curves.values()):
+        equity_chart_html = build_multi_equity_curve_chart(equity_curves).to_html(
             full_html=False, include_plotlyjs="cdn"
         )
 
-    render_context = {k: v for k, v in context.items() if k != "equity_curve"}
+    render_context = {k: v for k, v in context.items() if k != "equity_curves"}
     return _env.get_template("evening_report.html.j2").render(
         **render_context, equity_chart_html=equity_chart_html
     )

@@ -43,6 +43,34 @@ def build_equity_curve_chart(
     return fig
 
 
+def build_multi_equity_curve_chart(
+    curves: dict[str, pd.Series],
+    title: str = "Strategy Comparison — Equity Curves",
+) -> go.Figure:
+    """One line per named series (e.g. strategy name) on a shared equity chart.
+
+    Unlike `build_equity_curve_chart` (one portfolio + an optional single
+    benchmark line), this supports an arbitrary number of series — the
+    comparison view for running several strategies side by side.
+    """
+    non_empty = {name: series for name, series in curves.items() if series is not None and not series.empty}
+    if not non_empty:
+        raise ValueError("Cannot chart when no series has any equity history")
+
+    fig = go.Figure()
+    for name, series in non_empty.items():
+        fig.add_trace(go.Scatter(x=series.index, y=series.values, mode="lines", name=name))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Date",
+        yaxis_title="Equity ($)",
+        template="plotly_white",
+        hovermode="x unified",
+    )
+    return fig
+
+
 def build_drawdown_chart(equity_curve: pd.Series, title: str = "Drawdown") -> go.Figure:
     if equity_curve.empty:
         raise ValueError("Cannot chart an empty equity curve")

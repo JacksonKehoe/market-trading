@@ -2,9 +2,14 @@
 
 Never executes trades or writes to the database: it only reads current
 state (via `SqlTradeRepository`) and, for the strategy-signals panel,
-calls the configured `Strategy` against live market data. Runs on
+calls each configured `Strategy` against live market data. Runs on
 localhost only (see `run_dashboard.py`) -- there is no authentication
 because it isn't meant to be reachable beyond your own machine.
+
+Each configured strategy (`Settings.strategies`) trades its own
+independent simulated account, so this page is built around comparing
+them: a summary table, a combined equity-curve chart (one line per
+strategy), and combined detail tables tagged with a "Strategy" column.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from app.data.factory import build_market_data_provider
 from app.data.watchlist import load_watchlist
 from app.database.engine import get_session_factory, init_db
 from app.database.repository import SqlTradeRepository
-from app.reporting.charts import build_equity_curve_chart
+from app.reporting.charts import build_multi_equity_curve_chart
 from app.reporting.positions import position_rows
 from app.risk.rules import RiskLimits
 from app.strategies.factory import build_strategy
@@ -36,66 +41,92 @@ def create_app(settings: Settings | None = None) -> Flask:
 
     repository = SqlTradeRepository(get_session_factory(settings))
     data_provider = build_market_data_provider(settings)
-    strategy = build_strategy(settings.strategy)
     watchlist = load_watchlist(settings)
     risk_limits = RiskLimits.from_settings(settings)
+    strategy_names = settings.strategies or ["sma"]
 
     app = Flask(__name__)
 
     @app.route("/")
     def index():  # type: ignore[no-untyped-def]
-        cash = repository.latest_cash_balance()
-        if cash is None:
-            cash = settings.initial_capital
+        comparison = []
+        equity_curves = {}
+        all_positions = []
+        all_signals = []
+        all_trades = []
+        risk_rows = []
 
-        open_positions = repository.list_open_positions()
-        broker_view = _StaticPositionsView(open_positions)
-        positions = position_rows(broker_view, data_provider)
-        positions_value = sum(p["market_value"] for p in positions)
-        equity = cash + positions_value
+        end = datetime.now()
+        start = end - timedelta(days=_SIGNAL_LOOKBACK_DAYS)
 
-        equity_curve = repository.equity_curve()
+        for name in strategy_names:
+            strategy = build_strategy(name)
+
+            cash = repository.latest_cash_balance(strategy.name)
+            if cash is None:
+                cash = settings.initial_capital
+
+            open_positions = repository.list_open_positions(strategy.name)
+            broker_view = _StaticPositionsView(open_positions)
+            rows = position_rows(broker_view, data_provider)
+            for row in rows:
+                row["strategy"] = strategy.name
+                all_positions.append(row)
+            positions_value = sum(row["market_value"] for row in rows)
+            equity = cash + positions_value
+
+            equity_curves[strategy.name] = repository.equity_curve(strategy.name)
+
+            for fill in repository.list_trades(strategy_name=strategy.name):
+                all_trades.append({"strategy": strategy.name, "fill": fill})
+
+            for symbol in watchlist:
+                try:
+                    data = data_provider.get_history(symbol, start, end)
+                    if data.empty:
+                        continue
+                    all_signals.append(strategy.generate_signal(symbol, data))
+                except Exception:
+                    logger.exception("Failed to compute a %s signal for %s on the dashboard", strategy.name, symbol)
+
+            return_pct = (equity / settings.initial_capital - 1) * 100 if settings.initial_capital else 0.0
+            comparison.append(
+                {
+                    "strategy": strategy.name,
+                    "equity": equity,
+                    "cash": cash,
+                    "return_pct": return_pct,
+                    "open_positions": len(rows),
+                }
+            )
+            risk_rows.append(
+                {
+                    "strategy": strategy.name,
+                    "allocation_pct": (positions_value / equity * 100) if equity else 0.0,
+                    "open_positions": len(rows),
+                    "max_open_positions": risk_limits.max_open_positions,
+                    "cash_reserve_pct": (cash / equity * 100) if equity else 0.0,
+                }
+            )
+
         chart_html = None
-        if not equity_curve.empty:
-            chart_html = build_equity_curve_chart(equity_curve).to_html(
+        if any(not curve.empty for curve in equity_curves.values()):
+            chart_html = build_multi_equity_curve_chart(equity_curves).to_html(
                 full_html=False, include_plotlyjs="cdn"
             )
 
-        trades = list(reversed(repository.list_trades()))[:_MAX_RECENT_TRADES]
-
-        signals = []
-        end = datetime.now()
-        start = end - timedelta(days=_SIGNAL_LOOKBACK_DAYS)
-        for symbol in watchlist:
-            try:
-                data = data_provider.get_history(symbol, start, end)
-                if data.empty:
-                    continue
-                signals.append(strategy.generate_signal(symbol, data))
-            except Exception:
-                logger.exception("Failed to compute a signal for %s on the dashboard", symbol)
-
-        risk_summary = {
-            "allocation_pct": (positions_value / equity * 100) if equity else 0.0,
-            "open_positions": len(positions),
-            "max_open_positions": risk_limits.max_open_positions,
-            "cash_reserve_pct": (cash / equity * 100) if equity else 0.0,
-            "stop_loss_pct": risk_limits.stop_loss_pct,
-            "take_profit_pct": risk_limits.take_profit_pct,
-        }
+        recent_trades = sorted(all_trades, key=lambda t: t["fill"].timestamp, reverse=True)[:_MAX_RECENT_TRADES]
 
         return render_template(
             "dashboard.html",
             generated_at=datetime.now(),
-            strategy_name=strategy.name,
-            equity=equity,
-            cash=cash,
-            positions_value=positions_value,
-            positions=positions,
+            comparison=comparison,
             chart_html=chart_html,
-            trades=trades,
-            signals=signals,
-            risk_summary=risk_summary,
+            positions=all_positions,
+            trades=recent_trades,
+            signals=all_signals,
+            risk_summary=risk_rows,
+            risk_limits=risk_limits,
         )
 
     return app

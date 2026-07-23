@@ -22,16 +22,17 @@ def main(settings: Settings | None = None) -> int:
     logger = get_logger("scheduler")
 
     scheduler = build_scheduler(settings)
+    strategies = ", ".join(settings.strategies)
     logger.info(
-        "Scheduler starting: morning=%s evening=%s hourly_scan=%s strategy=%s",
+        "Scheduler starting: morning=%s evening=%s hourly_scan=%s strategies=%s",
         settings.morning_report_time,
         settings.evening_report_time,
         settings.hourly_scan_enabled,
-        settings.strategy,
+        strategies,
     )
     print(
         f"Scheduler running (morning {settings.morning_report_time}, "
-        f"evening {settings.evening_report_time}, strategy={settings.strategy}). "
+        f"evening {settings.evening_report_time}, strategies={strategies}). "
         "Press Ctrl+C to stop."
     )
     try:

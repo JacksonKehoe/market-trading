@@ -25,29 +25,37 @@
   <div class="disclaimer">Paper trading only. All figures reflect simulated positions -- no real trades were placed.</div>
 
   <h1>Morning Trading Report</h1>
-  <p>
-    <strong>Strategy:</strong> {{ strategy_name }} &nbsp;|&nbsp;
-    <strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}
-  </p>
+  <p><strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
 
   <h2>Market Summary</h2>
   <p>Watchlist average move (last close vs. prior close):
     <strong class="{{ 'positive' if market_summary_pct >= 0 else 'negative' }}">{{ "%.2f"|format(market_summary_pct) }}%</strong>
   </p>
 
-  <h2>Account</h2>
-  <div class="summary-grid">
-    <div class="summary-card"><div class="summary-label">Portfolio Value</div><div class="summary-value">${{ "%.2f"|format(portfolio_value) }}</div></div>
-    <div class="summary-card"><div class="summary-label">Cash Available</div><div class="summary-value">${{ "%.2f"|format(cash) }}</div></div>
-    <div class="summary-card"><div class="summary-label">Open Positions</div><div class="summary-value">{{ positions | length }}</div></div>
-  </div>
+  <h2>Strategy Comparison</h2>
+  <table>
+    <thead><tr><th>Strategy</th><th>Portfolio Value</th><th>Cash</th><th>Open Positions</th><th>BUY Signals</th><th>SELL Signals</th></tr></thead>
+    <tbody>
+    {% for c in comparison %}
+      <tr>
+        <td>{{ c.strategy }}</td>
+        <td>${{ "%.2f"|format(c.equity) }}</td>
+        <td>${{ "%.2f"|format(c.cash) }}</td>
+        <td>{{ c.open_positions }}</td>
+        <td class="buy">{{ c.buy_signals }}</td>
+        <td class="sell">{{ c.sell_signals }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 
   <h2>Open Positions</h2>
   <table>
-    <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead>
+    <thead><tr><th>Strategy</th><th>Symbol</th><th>Qty</th><th>Avg Entry</th><th>Current</th><th>Unrealized P/L</th></tr></thead>
     <tbody>
     {% for p in positions %}
       <tr>
+        <td>{{ p.strategy }}</td>
         <td>{{ p.symbol }}</td>
         <td>{{ p.quantity }}</td>
         <td>${{ "%.2f"|format(p.avg_entry_price) }}</td>
@@ -55,7 +63,7 @@
         <td class="{{ 'positive' if p.unrealized_pl >= 0 else 'negative' }}">${{ "%.2f"|format(p.unrealized_pl) }} ({{ "%.2f"|format(p.unrealized_pl_pct) }}%)</td>
       </tr>
     {% else %}
-      <tr><td colspan="5">No open positions.</td></tr>
+      <tr><td colspan="6">No open positions.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -65,16 +73,16 @@
 
   <h2>Signals</h2>
   <table>
-    <thead><tr><th>Symbol</th><th>Signal</th><th>Price</th><th>Reason</th></tr></thead>
+    <thead><tr><th>Strategy</th><th>Symbol</th><th>Signal</th><th>Price</th><th>Reason</th></tr></thead>
     <tbody>
     {% for s in buy_signals %}
-      <tr><td>{{ s.symbol }}</td><td class="buy">BUY</td><td>${{ "%.2f"|format(s.price) }}</td><td>{{ s.reason }}</td></tr>
+      <tr><td>{{ s.strategy_name }}</td><td>{{ s.symbol }}</td><td class="buy">BUY</td><td>${{ "%.2f"|format(s.price) }}</td><td>{{ s.reason }}</td></tr>
     {% endfor %}
     {% for s in sell_signals %}
-      <tr><td>{{ s.symbol }}</td><td class="sell">SELL</td><td>${{ "%.2f"|format(s.price) }}</td><td>{{ s.reason }}</td></tr>
+      <tr><td>{{ s.strategy_name }}</td><td>{{ s.symbol }}</td><td class="sell">SELL</td><td>${{ "%.2f"|format(s.price) }}</td><td>{{ s.reason }}</td></tr>
     {% endfor %}
     {% if not buy_signals and not sell_signals %}
-      <tr><td colspan="4">No BUY/SELL signals today ({{ hold_count }} symbol(s) holding).</td></tr>
+      <tr><td colspan="5">No BUY/SELL signals today across any strategy ({{ hold_count }} symbol-strategy pair(s) holding).</td></tr>
     {% endif %}
     </tbody>
   </table>

@@ -13,6 +13,14 @@ strategies with virtual money before any real capital is ever risked.
 
 Phase 6 — scheduler, email reports, dashboard. All six planned phases are complete. See [Development Phases](#development-phases).
 
+**Multi-strategy comparison:** the scheduler, email reports, and dashboard
+run every strategy listed in `STRATEGIES` (default `sma,rsi,macd`)
+simultaneously, each in its own independent simulated account with the
+same starting capital and the same watchlist — not one account split
+across strategies. This makes their results directly comparable: the
+dashboard and both email reports lead with a strategy comparison table
+and a combined equity-curve chart (one line per strategy).
+
 ## Quickstart
 
 ```bash
@@ -33,16 +41,18 @@ python run_dashboard.py    # local read-only dashboard at http://127.0.0.1:5000
   engine, prints a performance summary, and saves a self-contained HTML
   report to `reports/`.
 - `run_scheduler.py` starts a long-running process that scans the
-  watchlist and places simulated trades at the times configured by
+  watchlist and places simulated trades — for *every* strategy in
+  `STRATEGIES`, each its own account — at the times configured by
   `MORNING_REPORT_TIME`/`EVENING_REPORT_TIME` (plus an optional hourly
-  scan), saving an HTML report to `reports/` and emailing it if
-  `EMAIL_*` is configured. Paper trading state (cash/positions) persists
-  in the SQLite database and is restored automatically if the process
-  restarts.
+  scan), saving one combined comparison HTML report to `reports/` and
+  emailing it if `EMAIL_*` is configured. Each strategy's paper trading
+  state (cash/positions) persists in the SQLite database, scoped by
+  strategy, and is restored automatically if the process restarts.
 - `run_dashboard.py` starts a local Flask server (bound to
-  `127.0.0.1` only) showing live portfolio value, holdings, strategy
-  signals, risk metrics, and recent transactions, read straight from the
-  database. It never places a trade.
+  `127.0.0.1` only) showing a live comparison across all configured
+  strategies — portfolio value, holdings, strategy signals, risk
+  metrics, and recent transactions, read straight from the database. It
+  never places a trade.
 
 None of these ever connect to a brokerage or place a real trade.
 
@@ -100,11 +110,11 @@ only points one way.
 | `app/portfolio` | `Portfolio` — the in-memory ledger `PaperBroker` uses to simulate an account: applies fills, tracks cash/positions/realized P/L, computes equity and unrealized P/L against a price map. No DB access — persistence is a separate concern. | `models` |
 | `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
-| `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord`); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
+| `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord` — positions and snapshots are scoped by `strategy_name`, since each strategy trades its own independent account); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
 | `app/reporting` | `Backtester` replays a `Strategy` across a watchlist and date range through the *real* `PaperBroker`/`RiskManager`/`ExecutionEngine` via `ReplayMarketDataProvider` (serves data "as of" a simulated date so nothing can see the future) — a backtest is the live paper-trading pipeline fed historical bars, not a separate simulation. `metrics.py` computes total return, CAGR, Sharpe, max drawdown, win rate, average gain/loss, profit factor, and expectancy from an equity curve + trade list (`compute_trade_pnl` reconstructs per-trade realized P&L by replaying fills through a scratch `Portfolio`). `charts.py` builds Plotly equity-curve and drawdown figures; `report_generator.py` renders them into a self-contained HTML file via Jinja2 and saves it to `reports/`. | `models`, `data`, `strategies`, `portfolio`, `risk`, `execution`, `database` |
-| `app/email` | `report_data.py` builds the morning/evening report context (portfolio value, cash, positions, signals, market movers, day P&L, best/worst performer, risk summary, next-day watchlist) from a live `BrokerInterface` + `MarketDataProvider` + `SqlTradeRepository` + `Strategy`. `renderer.py` turns that into HTML via Jinja2 (embedding a Plotly equity-curve chart in the evening report). `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting` |
-| `app/scheduler` | `context.py` builds the live `TradingContext` (broker rehydrated from the DB, engine, repository, strategy, watchlist) — the paper-trading counterpart to `reporting.Backtester`. `jobs.py` has `morning_job` (reset daily-loss baseline, scan + trade, email + save report), `evening_job` (mark-to-market, email + save report), and `hourly_scan_job` (optional, trades only, no report). `scheduler_service.py` wires `Settings.morning_report_time`/`evening_report_time`/`hourly_scan_enabled` into APScheduler `CronTrigger`s. | everything above |
-| `app/dashboard` | A read-only Flask app (`app.py`, one route) showing live equity, cash, holdings, an equity-curve chart, strategy signals (computed on the fly, never executed), risk metrics, and recent transactions — all read from `SqlTradeRepository` plus one live price/signal check. Runs on `127.0.0.1` only; never writes to the database or places a trade. | `models`, `config`, `data`, `database`, `risk`, `strategies`, `reporting` |
+| `app/email` | `report_data.py` builds the morning/evening report context — a per-strategy comparison table plus combined positions/signals/trades/risk tables (each row tagged with a `strategy` column) and, for the evening report, a combined equity-curve series per strategy — from a list of `StrategyState` (name + live `BrokerInterface` + signals), plus shared `MarketDataProvider`/`SqlTradeRepository`. `renderer.py` turns that into HTML via Jinja2, building a multi-line Plotly equity-curve chart (one line per strategy) for the evening report. `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting` |
+| `app/scheduler` | `context.py`'s `build_trading_contexts` builds one `TradingContext` per `Settings.strategies` entry — each its own broker rehydrated from the DB, engine, and strategy, all sharing one data provider (and its cache) and one repository — the paper-trading counterpart to `reporting.Backtester`. `jobs.py` has `morning_job` (reset each strategy's daily-loss baseline, scan + trade, email one comparison report), `evening_job` (mark every strategy to market, email one comparison report), and `hourly_scan_job` (optional, trades only, no report). `scheduler_service.py` wires `Settings.morning_report_time`/`evening_report_time`/`hourly_scan_enabled` into APScheduler `CronTrigger`s. | everything above |
+| `app/dashboard` | A read-only Flask app (`app.py`, one route) showing a live comparison across every configured strategy: a summary table, a combined equity-curve chart, and combined holdings/signals/risk/transactions tables tagged by strategy — all read from `SqlTradeRepository` plus one live price/signal check per strategy per symbol. Runs on `127.0.0.1` only; never writes to the database or places a trade. | `models`, `config`, `data`, `database`, `risk`, `strategies`, `reporting` |
 
 ### Key design decisions
 
@@ -188,15 +198,15 @@ only points one way.
   could be reused by the dashboard or email reports later without change.
   (They now are: the dashboard and the evening email report both reuse
   `app.reporting.charts.build_equity_curve_chart` unchanged.)
-- **The scheduler rehydrates paper trading state from the database on
-  startup instead of resetting to `INITIAL_CAPITAL`.**
+- **The scheduler rehydrates each strategy's paper trading state from the
+  database on startup instead of resetting to `INITIAL_CAPITAL`.**
   `build_trading_context` reads the most recent `AccountSnapshotRecord`
-  for cash and `list_open_positions()` for holdings, seeding a fresh
-  `PaperBroker`/`Portfolio` with them. Without this, restarting
-  `run_scheduler.py` would silently wipe out simulated trading history —
-  which would be a bad enough bug in any persistence layer, but especially
-  misleading in a tool whose entire purpose is tracking simulated
-  performance over time.
+  for that `strategy_name`'s cash and `list_open_positions(strategy_name)`
+  for holdings, seeding a fresh `PaperBroker`/`Portfolio` with them.
+  Without this, restarting `run_scheduler.py` would silently wipe out
+  simulated trading history for every strategy — which would be a bad
+  enough bug in any persistence layer, but especially misleading in a
+  tool whose entire purpose is tracking simulated performance over time.
 - **`app.database.engine`'s `get_engine`/`get_session_factory` are keyed
   by database URL, not an unconditional singleton.** They were originally
   a plain "first call wins" cache; that's invisible in production (one
@@ -223,6 +233,21 @@ only points one way.
   local-timezone `date.today()` would misclassify trades near midnight
   UTC for any non-UTC user. Precise local-market-timezone trading-day
   boundaries (e.g. NYSE's 4pm ET close) are out of scope for this version.
+- **Each strategy gets its own independent simulated account, not a
+  shared pool split between strategies.** `positions` and
+  `account_snapshots` are keyed by `(strategy_name, ...)` rather than
+  globally, so two strategies can each hold a position in the same
+  symbol, or have completely different equity curves, at once. This is
+  what makes "which strategy is performing best" a meaningful, apples-
+  to-apples question rather than an artifact of shared capital
+  constraints — the alternative (splitting one account's cash across
+  strategies) would let one strategy's trades starve another's.
+- **`ExecutionEngine` knows its own `strategy_name` for tagging
+  persisted snapshots; risk limits stay global, not per-strategy.**
+  `RiskLimits` comes from one shared `Settings`, so every strategy plays
+  by the same stop-loss/take-profit/position-sizing rules — the
+  comparison is about strategy logic, not one strategy getting looser
+  risk controls than another.
 
 ## Project layout
 
@@ -264,8 +289,9 @@ run_dashboard.py  python run_dashboard.py [--port N]  — starts the local dashb
 ## Configuration
 
 All configuration lives in `.env` (see `.env.example` for the full list
-with defaults: `INITIAL_CAPITAL`, `WATCHLIST`, `STRATEGY` (`sma`/`rsi`/`macd`),
-`DATABASE_PATH`, `EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`,
+with defaults: `INITIAL_CAPITAL`, `WATCHLIST`, `STRATEGIES` (comma-separated
+subset of `sma`/`rsi`/`macd` — each runs as its own independent simulated
+account), `DATABASE_PATH`, `EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`,
 `MORNING_REPORT_TIME`, `EVENING_REPORT_TIME`, `HOURLY_SCAN_ENABLED`,
 risk-limit percentages, etc.). Every value has a working default, so the
 app runs with no `.env` file and no email credentials at all — email
