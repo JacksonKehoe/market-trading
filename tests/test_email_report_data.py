@@ -136,6 +136,51 @@ def test_morning_report_context_benchmark_day_change_none_when_unavailable() -> 
     assert context["benchmark_day_change"] is None
 
 
+def test_morning_report_context_market_summary_reflects_only_held_positions() -> None:
+    # AAPL is held and up 2%; MSFT is in the watchlist but not held and crashes --
+    # the summary metric must reflect only the former.
+    recent_start = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    aapl_history = make_price_frame([100.0, 102.0], start=recent_start)
+    msft_history = make_price_frame([100.0, 50.0], start=recent_start)
+    provider = FakeHistoricalMarketDataProvider({"AAPL": aapl_history, "MSFT": msft_history})
+    broker = PaperBroker(10_000.0, provider)
+    broker.submit_order(Order(symbol="AAPL", side=OrderSide.BUY, quantity=1))
+    strategies = [StrategyState("sma", broker, [])]
+
+    context = build_morning_report_context(Settings(), provider, ["AAPL", "MSFT"], strategies)
+
+    assert context["position_symbol_count"] == 1
+    assert context["market_summary_pct"] == pytest.approx(2.0)
+
+
+def test_morning_report_context_market_summary_none_when_no_open_positions() -> None:
+    provider = FakeMarketDataProvider({"AAPL": 150.0})
+    broker = PaperBroker(10_000.0, provider)
+    strategies = [StrategyState("sma", broker, [])]
+
+    context = build_morning_report_context(Settings(), provider, ["AAPL"], strategies)
+
+    assert context["position_symbol_count"] == 0
+    assert context["market_summary_pct"] is None
+
+
+def test_morning_report_context_market_summary_dedupes_symbol_held_by_multiple_strategies() -> None:
+    recent_start = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    aapl_history = make_price_frame([100.0, 103.0], start=recent_start)  # +3%
+    provider = FakeHistoricalMarketDataProvider({"AAPL": aapl_history})
+    broker_a = PaperBroker(10_000.0, provider)
+    broker_b = PaperBroker(10_000.0, provider)
+    broker_a.submit_order(Order(symbol="AAPL", side=OrderSide.BUY, quantity=1, strategy_name="sma"))
+    broker_b.submit_order(Order(symbol="AAPL", side=OrderSide.BUY, quantity=1, strategy_name="rsi"))
+    strategies = [StrategyState("sma", broker_a, []), StrategyState("rsi", broker_b, [])]
+
+    context = build_morning_report_context(Settings(), provider, ["AAPL"], strategies)
+
+    # Both strategies hold AAPL, but it should count once, not be double-weighted.
+    assert context["position_symbol_count"] == 1
+    assert context["market_summary_pct"] == pytest.approx(3.0)
+
+
 def test_evening_report_context_computes_day_pl_and_trades_today(tmp_path: Path) -> None:
     provider = FakeMarketDataProvider({"AAPL": 160.0})
     broker = PaperBroker(10_000.0, provider)

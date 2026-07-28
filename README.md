@@ -22,13 +22,16 @@ dashboard and both email reports lead with a strategy comparison table
 and a combined equity-curve chart (one line per strategy).
 
 **News sentiment:** an optional fourth strategy, `sma_sentiment`, scrapes
-recent news headlines and vetoes SMA-crossover BUY signals when sentiment
-is bearish. Free and local — scraped from Google News' RSS feed and
-scored with VADER, no LLM/API key/cost involved. Opt in by adding
-`sma_sentiment` to `STRATEGIES`; it then shows up in the dashboard/reports
-comparison like any other strategy with no other changes needed. The
-morning email always includes a Market Sentiment table for the watchlist
-regardless of which strategies are enabled.
+recent news headlines and adjusts SMA-crossover BUY signals based on
+sentiment in both directions: it vetoes a BUY (downgrades to HOLD) on
+bearish sentiment, and it pulls a BUY forward a bar early (upgrades a
+HOLD) on bullish sentiment when the fast/slow SMA gap has nearly — but
+not yet actually — crossed. Free and local — scraped from Google News'
+RSS feed and scored with VADER, no LLM/API key/cost involved. Opt in by
+adding `sma_sentiment` to `STRATEGIES`; it then shows up in the
+dashboard/reports comparison like any other strategy with no other
+changes needed. The morning email always includes a Market Sentiment
+table for the watchlist regardless of which strategies are enabled.
 
 **S&P 500 benchmark:** every equity-curve chart (dashboard and evening
 email) and the morning email's market summary include `BENCHMARK_SYMBOL`
@@ -124,13 +127,13 @@ only points one way.
 | `app/data` | `MarketDataProvider` interface; `YFinanceProvider` (free, no API key, US equities + ETFs); `CachedMarketDataProvider`, a decorator adding an on-disk Parquet history cache and a short-TTL in-memory latest-price cache around any provider; `load_watchlist` resolves `Settings.watchlist` into a deduplicated symbol list; `build_market_data_provider` wires the concrete (cached, yfinance-backed) stack for real use. Strategies never call a data vendor directly. | `models`, `config` |
 | `app/indicators` | Pure functions operating on `pandas` Series — no classes, no state: `sma`/`ema`, `rsi` (Wilder's smoothing), `macd` (returns a `macd`/`signal`/`histogram` DataFrame). `NaN` during warm-up instead of a misleadingly early value. | nothing |
 | `app/sentiment` | `NewsProvider` interface; `GoogleNewsRssProvider` scrapes Google News' public RSS search feed for a symbol (real server-rendered XML, not a JS-rendered page — no headless browser needed). `SentimentAnalyzer` interface; `VaderSentimentAnalyzer` scores headlines with VADER, a free local rule-based lexicon scorer (no LLM, no API key, no cost). `SentimentService` wraps both behind a TTL cache (mirrors `CachedMarketDataProvider`'s pattern) and swallows scraping/scoring failures, returning `None` ("unknown") rather than raising. `build_sentiment_service(settings)` wires the concrete stack. | `models`, `config` |
-| `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD), plus a shared `_hold()` helper for the common "not enough history" case. Three base implementations: `MovingAverageCrossoverStrategy`, `RsiStrategy` (oversold/overbought bounce), `MacdStrategy` — all edge-triggered (fire once on the actual cross, not every bar the condition holds). `SentimentFilteredStrategy` is a decorator wrapping any base `Strategy` + a `SentimentService`, downgrading BUY to HOLD when news sentiment is bearish; registered in `factory.py` as `sma_sentiment`. Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators`, `sentiment` (only for the decorator) |
+| `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD), plus a shared `_hold()` helper for the common "not enough history" case. Three base implementations: `MovingAverageCrossoverStrategy` (also exposes `near_bullish_crossover(data)` — true when the fast/slow SMA gap is narrow and closing, not yet actually crossed), `RsiStrategy` (oversold/overbought bounce), `MacdStrategy` — all edge-triggered (fire once on the actual cross, not every bar the condition holds). `SentimentFilteredStrategy` is a decorator wrapping any base `Strategy` + a `SentimentService`: downgrades BUY to HOLD on bearish sentiment (any base strategy), and — specifically when wrapping a `MovingAverageCrossoverStrategy` — upgrades a HOLD to an early BUY on bullish sentiment when `near_bullish_crossover` is true; registered in `factory.py` as `sma_sentiment`. Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators`, `sentiment` (only for the decorator) |
 | `app/portfolio` | `Portfolio` — the in-memory ledger `PaperBroker` uses to simulate an account: applies fills, tracks cash/positions/realized P/L, computes equity and unrealized P/L against a price map. No DB access — persistence is a separate concern. | `models` |
 | `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
 | `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord` — positions and snapshots are scoped by `strategy_name`, since each strategy trades its own independent account); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
 | `app/reporting` | `Backtester` replays a `Strategy` across a watchlist and date range through the *real* `PaperBroker`/`RiskManager`/`ExecutionEngine` via `ReplayMarketDataProvider` (serves data "as of" a simulated date so nothing can see the future) — a backtest is the live paper-trading pipeline fed historical bars, not a separate simulation. `metrics.py` computes total return, CAGR, Sharpe, max drawdown, win rate, average gain/loss, profit factor, and expectancy from an equity curve + trade list (`compute_trade_pnl` reconstructs per-trade realized P&L by replaying fills through a scratch `Portfolio`). `benchmark.py`'s `compute_benchmark_curve(provider, symbol, start, end, initial_capital)` scales a symbol's close price to start at the same initial capital as the strategies (returns `None`, never raises, if the symbol has no data for the range) — shared by the backtester, dashboard, and email reports so "compare against a benchmark" is implemented once. `charts.py` builds Plotly equity-curve and drawdown figures (the benchmark is just another named series in the same multi-line chart); `report_generator.py` renders them into a self-contained HTML file via Jinja2 and saves it to `reports/`. | `models`, `data`, `strategies`, `portfolio`, `risk`, `execution`, `database` |
-| `app/email` | `report_data.py` builds the morning/evening report context — a per-strategy comparison table plus combined positions/signals/trades/risk tables (each row tagged with a `strategy` column) and, for the evening report, a combined equity-curve series per strategy — from a list of `StrategyState` (name + live `BrokerInterface` + signals), plus shared `MarketDataProvider`/`SqlTradeRepository`. Also appends a `BENCHMARK_SYMBOL` row/series (via `reporting.benchmark.compute_benchmark_curve`, always requesting at least a 7-day window so it works from day one even on a brand-new account) and, for the morning report, a per-symbol sentiment table (via an optional `SentimentService`). `renderer.py` turns that into HTML via Jinja2, building a multi-line Plotly equity-curve chart (one line per strategy, plus the benchmark) for the evening report. `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting`, `sentiment` |
+| `app/email` | `report_data.py` builds the morning/evening report context — a per-strategy comparison table plus combined positions/signals/trades/risk tables (each row tagged with a `strategy` column) and, for the evening report, a combined equity-curve series per strategy — from a list of `StrategyState` (name + live `BrokerInterface` + signals), plus shared `MarketDataProvider`/`SqlTradeRepository`. Also appends a `BENCHMARK_SYMBOL` row/series (via `reporting.benchmark.compute_benchmark_curve`, always requesting at least a 7-day window so it works from day one even on a brand-new account) and, for the morning report, a per-symbol sentiment table (via an optional `SentimentService`) plus a "Market Summary" move metric scoped to symbols actually held across every strategy's account (deduplicated), not the full watchlist. `renderer.py` turns that into HTML via Jinja2, building a multi-line Plotly equity-curve chart (one line per strategy, plus the benchmark) for the evening report. `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting`, `sentiment` |
 | `app/scheduler` | `context.py`'s `build_trading_contexts` builds one `TradingContext` per `Settings.strategies` entry — each its own broker rehydrated from the DB, engine, and strategy, all sharing one data provider (and its cache) and one repository — the paper-trading counterpart to `reporting.Backtester`. `jobs.py` has `morning_job` (reset each strategy's daily-loss baseline, scan + trade, build a `SentimentService` for the report, email one comparison report), `evening_job` (mark every strategy to market, email one comparison report), and `hourly_scan_job` (optional, trades only, no report). `scheduler_service.py` wires `Settings.morning_report_time`/`evening_report_time`/`hourly_scan_enabled` into APScheduler `CronTrigger`s. | everything above |
 | `app/dashboard` | A read-only Flask app (`app.py`, one route) showing a live comparison across every configured strategy: a summary table, a combined equity-curve chart, and combined holdings/signals/risk/transactions tables tagged by strategy — all read from `SqlTradeRepository` plus one live price/signal check per strategy per symbol. Also adds a `BENCHMARK_SYMBOL` comparison row and chart series (same shared `compute_benchmark_curve`, same 7-day minimum lookback as the email reports), styled distinctly and excluded from the signal-filter dropdown since it isn't a strategy. Runs on `127.0.0.1` only; never writes to the database or places a trade. | `models`, `config`, `data`, `database`, `risk`, `strategies`, `reporting` |
 
@@ -275,13 +278,25 @@ only points one way.
   interface, so an LLM-backed implementation could be swapped in later
   as an opt-in upgrade without changing `SentimentService` or
   `SentimentFilteredStrategy`.
-- **Sentiment filters BUY signals only; it never generates or blocks a
-  SELL.** `SentimentFilteredStrategy` only consults `SentimentService`
-  when the wrapped strategy proposes a BUY, downgrading it to HOLD on
-  bearish sentiment. SELL and HOLD pass through untouched — risk-driven
-  exits (`RiskManager.check_exits`) are already independent of any
-  signal, and a strategy's own SELL logic shouldn't be second-guessed by
-  a noisier, lower-fidelity signal.
+- **Sentiment only ever turns a BUY into a HOLD or a HOLD into a BUY; it
+  never touches SELL.** `SentimentFilteredStrategy` downgrades a proposed
+  BUY to HOLD on bearish sentiment, and (see below) can upgrade a HOLD to
+  an early BUY on bullish sentiment — but SELL always passes through
+  untouched. Risk-driven exits (`RiskManager.check_exits`) are already
+  independent of any signal, and a strategy's own SELL logic shouldn't be
+  second-guessed by a noisier, lower-fidelity signal.
+- **The bullish case is the mirror of the bearish veto, but narrower in
+  scope on purpose.** `SentimentFilteredStrategy` only pulls a HOLD
+  forward into an early BUY when wrapping a `MovingAverageCrossoverStrategy`
+  specifically (checked via `isinstance`), because "close to a buy" only
+  has an unambiguous, base-strategy-agnostic meaning for a crossover: the
+  fast/slow SMA gap narrowing toward zero (`near_bullish_crossover`,
+  gap ≤ 1.5% of the slow SMA *and* smaller than the previous bar's gap,
+  so a stale small gap that isn't actually converging doesn't fire). RSI
+  and MACD don't get this treatment — "almost oversold" or "almost a
+  MACD cross" aren't the same kind of measurable proximity, so extending
+  this to them would mean guessing at a threshold with no principled
+  basis, rather than reusing one that already existed for the SMA case.
 - **`SentimentFilteredStrategy` is a decorator, not a new strategy
   class per base strategy.** Any existing `Strategy` can be wrapped
   (`SentimentFilteredStrategy(RsiStrategy(), sentiment_service)`) without
@@ -313,6 +328,18 @@ only points one way.
   `min(earliest_snapshot, now - 7 days)` so the benchmark comparison
   works from the first run instead of only appearing once several days
   of history have organically accumulated.
+- **The morning email's "Market Summary" move metric is scoped to held
+  symbols, not the whole watchlist.** It's a straight average of
+  yesterday-to-today price change across the distinct set of symbols any
+  strategy currently holds (deduplicated, since two strategies can hold
+  the same symbol independently) — a stock cratering that nothing is
+  invested in shouldn't move a "how did my morning look" number. When
+  nothing is held, the metric shows "no open positions" rather than a
+  misleading 0.00% that would otherwise read as "the market was flat."
+  The separate "Largest Movers" table below it is intentionally left
+  scoped to the full watchlist — that one is about spotting opportunity
+  outside current holdings, a different question from "how are my
+  positions doing."
 
 ## Project layout
 

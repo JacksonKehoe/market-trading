@@ -81,3 +81,37 @@ def test_raises_on_empty_data() -> None:
 
     with pytest.raises(ValueError):
         strategy.generate_signal("TEST", empty)
+
+
+def test_near_bullish_crossover_true_when_gap_is_small_and_narrowing() -> None:
+    # A dip (fast SMA falls below slow SMA) followed by a partial recovery that
+    # closes most -- but not all -- of the gap on the last bar.
+    prices = [10.0, 10.0, 10.0, 9.0, 9.0, 9.0, 10.15]
+    data = make_price_frame(prices)
+    strategy = MovingAverageCrossoverStrategy(fast_window=3, slow_window=6)
+
+    assert strategy.near_bullish_crossover(data) is True
+    assert strategy.generate_signal("TEST", data).signal_type == SignalType.HOLD  # not an actual cross yet
+
+
+def test_near_bullish_crossover_false_when_gap_still_wide() -> None:
+    # Same dip, but a much smaller recovery bump -- gap narrows but stays well above threshold.
+    prices = [10.0, 10.0, 10.0, 9.0, 9.0, 9.0, 9.3]
+    data = make_price_frame(prices)
+    strategy = MovingAverageCrossoverStrategy(fast_window=3, slow_window=6)
+
+    assert strategy.near_bullish_crossover(data) is False
+
+
+def test_near_bullish_crossover_false_when_already_crossed() -> None:
+    data = make_price_frame([5.0, 4.0, 3.0, 2.0, 10.0])
+    strategy = MovingAverageCrossoverStrategy(fast_window=2, slow_window=3)
+
+    assert strategy.near_bullish_crossover(data) is False
+
+
+def test_near_bullish_crossover_false_when_not_enough_history() -> None:
+    data = make_price_frame([10.0, 11.0, 12.0])
+    strategy = MovingAverageCrossoverStrategy(fast_window=5, slow_window=10)
+
+    assert strategy.near_bullish_crossover(data) is False

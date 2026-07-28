@@ -55,10 +55,14 @@ class StrategyState:
     signals: list[Signal] = field(default_factory=list)
 
 
-def _market_movers(provider: MarketDataProvider, symbols: list[str]) -> list[dict]:
+def _day_changes(provider: MarketDataProvider, symbols: list[str]) -> list[dict]:
+    """Last close vs. prior close for each symbol, unsorted and untruncated --
+    the full-precision building block both `_market_movers` (top N by magnitude)
+    and the positions-based summary metric (an average over *every* held symbol,
+    not just the biggest movers) are computed from."""
     end = datetime.now()
     start = end - timedelta(days=_MARKET_MOVERS_LOOKBACK_DAYS)
-    movers = []
+    changes = []
     for symbol in symbols:
         try:
             data = provider.get_history(symbol, start, end)
@@ -70,11 +74,16 @@ def _market_movers(provider: MarketDataProvider, symbols: list[str]) -> list[dic
         last_close = float(data["close"].iloc[-1])
         if prev_close == 0:
             continue
-        movers.append(
+        changes.append(
             {"symbol": symbol, "price": last_close, "change_pct": (last_close / prev_close - 1) * 100}
         )
-    movers.sort(key=lambda mover: abs(mover["change_pct"]), reverse=True)
-    return movers[:_TOP_MOVERS]
+    return changes
+
+
+def _market_movers(provider: MarketDataProvider, symbols: list[str]) -> list[dict]:
+    changes = _day_changes(provider, symbols)
+    changes.sort(key=lambda mover: abs(mover["change_pct"]), reverse=True)
+    return changes[:_TOP_MOVERS]
 
 
 def _sentiment_rows(sentiment_service: SentimentService | None, symbols: list[str]) -> list[dict]:
@@ -103,7 +112,17 @@ def build_morning_report_context(
     sentiment_service: SentimentService | None = None,
 ) -> dict:
     movers = _market_movers(data_provider, watchlist)
-    market_summary_pct = sum(m["change_pct"] for m in movers) / len(movers) if movers else 0.0
+
+    # The headline summary metric is scoped to symbols actually held (across every
+    # strategy's independent account), not the whole watchlist -- a stock dropping
+    # that nothing is invested in isn't relevant to "how did my morning look."
+    # Unlike `movers` above, this isn't truncated to the top N: it's a straight
+    # average across every held symbol, or a handful of extreme movers would skew it.
+    held_symbols = sorted({position.symbol for state in strategies for position in state.broker.get_positions()})
+    position_changes = _day_changes(data_provider, held_symbols)
+    market_summary_pct = (
+        sum(c["change_pct"] for c in position_changes) / len(position_changes) if position_changes else None
+    )
 
     benchmark_movers = _market_movers(data_provider, [settings.benchmark_symbol])
     benchmark_day_change = benchmark_movers[0] if benchmark_movers else None
@@ -163,6 +182,7 @@ def build_morning_report_context(
         "hold_count": hold_count,
         "market_movers": movers,
         "market_summary_pct": market_summary_pct,
+        "position_symbol_count": len(held_symbols),
         "benchmark_symbol": settings.benchmark_symbol,
         "benchmark_day_change": benchmark_day_change,
         "sentiment_scores": sentiment_scores,

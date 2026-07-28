@@ -28,8 +28,12 @@
   <p><strong>Generated:</strong> {{ generated_at.strftime("%Y-%m-%d %H:%M UTC") }}</p>
 
   <h2>Market Summary</h2>
-  <p>Watchlist average move (last close vs. prior close):
-    <strong class="{{ 'positive' if market_summary_pct >= 0 else 'negative' }}">{{ "%.2f"|format(market_summary_pct) }}%</strong>
+  <p>Your open positions' average move (last close vs. prior close, across {{ position_symbol_count }} held symbol(s)):
+    {% if market_summary_pct is not none %}
+      <strong class="{{ 'positive' if market_summary_pct >= 0 else 'negative' }}">{{ "%.2f"|format(market_summary_pct) }}%</strong>
+    {% else %}
+      <em>no open positions</em>
+    {% endif %}
   </p>
   <p>{{ benchmark_symbol }} (benchmark):
     {% if benchmark_day_change %}
