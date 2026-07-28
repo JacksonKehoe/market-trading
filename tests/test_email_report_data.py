@@ -1,13 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from app.config.settings import Settings
 from app.email.report_data import StrategyState, build_evening_report_context, build_morning_report_context
 from app.execution.paper_broker import PaperBroker
-from app.models.domain import Order, Signal
-from app.models.enums import OrderSide, SignalType
+from app.models.domain import Account, Order, Signal
+from app.models.enums import OrderSide, SentimentLabel, SignalType
 from app.risk.rules import RiskLimits
-from tests.conftest import FakeMarketDataProvider, build_test_repository
+from tests.conftest import FakeHistoricalMarketDataProvider, FakeMarketDataProvider, build_test_repository, make_price_frame
 
 
 def _limits(**overrides: object) -> RiskLimits:
@@ -75,6 +77,65 @@ def test_morning_report_context_combines_multiple_strategies() -> None:
     assert len(context["buy_signals"]) == 1
 
 
+def test_morning_report_context_includes_sentiment_scores_when_service_provided() -> None:
+    from app.models.domain import SentimentScore
+
+    class _FixedSentimentService:
+        def get_sentiment(self, symbol: str):
+            return SentimentScore(
+                symbol=symbol, label=SentimentLabel.BULLISH, score=0.42, headline_count=5, timestamp=datetime.now(UTC)
+            )
+
+    provider = FakeMarketDataProvider({"AAPL": 150.0})
+    broker = PaperBroker(10_000.0, provider)
+    strategies = [StrategyState("sma", broker, [])]
+
+    context = build_morning_report_context(
+        Settings(), provider, ["AAPL"], strategies, sentiment_service=_FixedSentimentService()
+    )
+
+    assert len(context["sentiment_scores"]) == 1
+    assert context["sentiment_scores"][0]["symbol"] == "AAPL"
+    assert context["sentiment_scores"][0]["label"] == SentimentLabel.BULLISH
+    assert context["sentiment_scores"][0]["score"] == 0.42
+
+
+def test_morning_report_context_sentiment_scores_empty_without_service() -> None:
+    provider = FakeMarketDataProvider({"AAPL": 150.0})
+    broker = PaperBroker(10_000.0, provider)
+    strategies = [StrategyState("sma", broker, [])]
+
+    context = build_morning_report_context(Settings(), provider, ["AAPL"], strategies)
+
+    assert context["sentiment_scores"] == []
+
+
+def test_morning_report_context_computes_benchmark_day_change() -> None:
+    # _market_movers looks back a few days from the real "now", so the fixture
+    # dates must be recent (not the make_price_frame default of Jan 2026).
+    recent_start = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    spy_history = make_price_frame([400.0, 404.0], start=recent_start)  # +1% day
+    provider = FakeHistoricalMarketDataProvider({"AAPL": spy_history, "SPY": spy_history})
+    broker = PaperBroker(10_000.0, provider)
+    strategies = [StrategyState("sma", broker, [])]
+
+    context = build_morning_report_context(Settings(benchmark_symbol="SPY"), provider, ["AAPL"], strategies)
+
+    assert context["benchmark_symbol"] == "SPY"
+    assert context["benchmark_day_change"] is not None
+    assert context["benchmark_day_change"]["change_pct"] == pytest.approx(1.0)
+
+
+def test_morning_report_context_benchmark_day_change_none_when_unavailable() -> None:
+    provider = FakeMarketDataProvider({"AAPL": 150.0})  # no history at all -> no benchmark data
+    broker = PaperBroker(10_000.0, provider)
+    strategies = [StrategyState("sma", broker, [])]
+
+    context = build_morning_report_context(Settings(benchmark_symbol="SPY"), provider, ["AAPL"], strategies)
+
+    assert context["benchmark_day_change"] is None
+
+
 def test_evening_report_context_computes_day_pl_and_trades_today(tmp_path: Path) -> None:
     provider = FakeMarketDataProvider({"AAPL": 160.0})
     broker = PaperBroker(10_000.0, provider)
@@ -120,6 +181,60 @@ def test_evening_report_context_best_worst_strategy(tmp_path: Path) -> None:
     )
 
     assert context["best_strategy"]["strategy"] == "sma"
+
+
+def test_evening_report_context_adds_benchmark_row_and_chart_series(tmp_path: Path) -> None:
+    spy_history = make_price_frame([400.0 + i for i in range(30)], start="2026-01-01")
+    provider = FakeHistoricalMarketDataProvider({"SPY": spy_history, "AAPL": spy_history})
+    broker = PaperBroker(10_000.0, provider)
+    repository = build_test_repository(tmp_path / "test.db")
+    # Snapshot timestamp inside the SPY fixture's Jan-2026 range so the ranges overlap.
+    repository.save_account_snapshot(
+        Account(timestamp=datetime(2026, 1, 15, tzinfo=UTC), cash=10_000.0, positions_value=0.0), "sma"
+    )
+    strategies = [StrategyState("sma", broker)]
+
+    context = build_evening_report_context(
+        Settings(benchmark_symbol="SPY"), provider, repository, ["AAPL"], _limits(), strategies
+    )
+
+    benchmark_rows = [c for c in context["comparison"] if c.get("is_benchmark")]
+    assert len(benchmark_rows) == 1
+    assert benchmark_rows[0]["strategy"] == "SPY (Benchmark)"
+    assert benchmark_rows[0]["cash"] is None
+    assert "SPY (Benchmark)" in context["equity_curves"]
+
+
+def test_evening_report_context_benchmark_is_excluded_from_best_worst(tmp_path: Path) -> None:
+    spy_history = make_price_frame([100.0 + i * 10 for i in range(30)], start="2026-01-01")  # huge benchmark gain
+    provider = FakeHistoricalMarketDataProvider({"SPY": spy_history, "AAPL": spy_history})
+    broker = PaperBroker(10_000.0, provider)
+    repository = build_test_repository(tmp_path / "test.db")
+    repository.save_account_snapshot(
+        Account(timestamp=datetime(2026, 1, 15, tzinfo=UTC), cash=10_000.0, positions_value=0.0), "sma"
+    )
+    strategies = [StrategyState("sma", broker)]
+
+    context = build_evening_report_context(
+        Settings(benchmark_symbol="SPY"), provider, repository, ["AAPL"], _limits(), strategies
+    )
+
+    # Even though the benchmark's normalized gain is huge, it must never be "best_strategy".
+    assert context["best_strategy"]["strategy"] == "sma"
+
+
+def test_evening_report_context_omits_benchmark_when_unavailable(tmp_path: Path) -> None:
+    provider = FakeMarketDataProvider({"AAPL": 160.0})  # no SPY history at all
+    broker = PaperBroker(10_000.0, provider)
+    repository = build_test_repository(tmp_path / "test.db")
+    strategies = [StrategyState("sma", broker)]
+
+    context = build_evening_report_context(
+        Settings(benchmark_symbol="SPY"), provider, repository, ["AAPL"], _limits(), strategies
+    )
+
+    assert not any(c.get("is_benchmark") for c in context["comparison"])
+    assert "SPY (Benchmark)" not in context["equity_curves"]
 
 
 def test_evening_report_context_recommends_when_at_max_positions(tmp_path: Path) -> None:

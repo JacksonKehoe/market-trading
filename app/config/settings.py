@@ -85,6 +85,9 @@ class Settings:
     sentiment_headline_limit: int = 10
     sentiment_cache_ttl_seconds: float = 1800.0
 
+    # Benchmark for comparison (dashboard + email reports)
+    benchmark_symbol: str = "SPY"
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path.as_posix()}"
@@ -130,4 +133,5 @@ def get_settings() -> Settings:
         strategies=_split_strategies(os.getenv("STRATEGIES", os.getenv("STRATEGY", "sma,rsi,macd"))),
         sentiment_headline_limit=int(os.getenv("SENTIMENT_HEADLINE_LIMIT", "10")),
         sentiment_cache_ttl_seconds=float(os.getenv("SENTIMENT_CACHE_TTL_SECONDS", "1800.0")),
+        benchmark_symbol=os.getenv("BENCHMARK_SYMBOL", "SPY").strip().upper(),
     )

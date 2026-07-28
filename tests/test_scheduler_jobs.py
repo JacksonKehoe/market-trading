@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.config.settings import Settings
 from app.execution.engine import ExecutionEngine
 from app.execution.paper_broker import PaperBroker
@@ -11,6 +13,19 @@ from app.scheduler.jobs import evening_job, hourly_scan_job, morning_job, run_tr
 from app.strategies.moving_average_crossover import MovingAverageCrossoverStrategy
 from app.strategies.rsi_strategy import RsiStrategy
 from tests.conftest import FakeHistoricalMarketDataProvider, build_test_repository, make_price_frame
+
+
+class _NoopSentimentService:
+    """No network, no scraping -- morning_job builds a real SentimentService
+    internally, so tests must monkeypatch it or they'd hit Google News for real."""
+
+    def get_sentiment(self, symbol: str):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _fake_sentiment_service(monkeypatch):
+    monkeypatch.setattr("app.scheduler.jobs.build_sentiment_service", lambda settings: _NoopSentimentService())
 
 
 def _limits(**overrides: object) -> RiskLimits:

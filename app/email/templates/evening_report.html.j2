@@ -20,6 +20,7 @@
   .disclaimer { background: #fff3cd; border: 1px solid #ffe08a; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1.5rem; font-size: 0.9rem; }
   .chart-container { margin-bottom: 1.5rem; background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0.5rem; }
   ul.recs { background: white; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem 1rem 1rem 2rem; }
+  .benchmark-row { font-style: italic; color: #555; }
 </style>
 </head>
 <body>
@@ -33,12 +34,12 @@
     <thead><tr><th>Strategy</th><th>Equity</th><th>Cash</th><th>Day P/L</th><th>Open Positions</th></tr></thead>
     <tbody>
     {% for c in comparison %}
-      <tr>
+      <tr class="{{ 'benchmark-row' if c.is_benchmark else '' }}">
         <td>{{ c.strategy }}</td>
         <td>${{ "%.2f"|format(c.equity) }}</td>
-        <td>${{ "%.2f"|format(c.cash) }}</td>
+        <td>{{ "$%.2f"|format(c.cash) if c.cash is not none else "—" }}</td>
         <td class="{{ 'positive' if c.day_pl >= 0 else 'negative' }}">${{ "%.2f"|format(c.day_pl) }} ({{ "%.2f"|format(c.day_pl_pct) }}%)</td>
-        <td>{{ c.open_positions }}</td>
+        <td>{{ c.open_positions if c.open_positions is not none else "—" }}</td>
       </tr>
     {% endfor %}
     </tbody>

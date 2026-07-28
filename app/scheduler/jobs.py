@@ -18,6 +18,7 @@ from app.email.renderer import render_evening_report, render_morning_report
 from app.email.report_data import StrategyState, build_evening_report_context, build_morning_report_context
 from app.models.domain import Signal
 from app.scheduler.context import TradingContext, build_trading_contexts
+from app.sentiment.factory import build_sentiment_service
 from app.utils.logging_config import get_logger
 
 app_logger = get_logger("app")
@@ -73,8 +74,9 @@ def morning_job(contexts: list[TradingContext] | None = None) -> None:
         strategy_states.append(StrategyState(context.strategy.name, context.broker, signals))
 
     first = contexts[0]
+    sentiment_service = build_sentiment_service(first.settings)
     report_context = build_morning_report_context(
-        first.settings, first.data_provider, first.watchlist, strategy_states
+        first.settings, first.data_provider, first.watchlist, strategy_states, sentiment_service
     )
     html = render_morning_report(report_context)
     _save_and_send(first.settings, html, "morning")

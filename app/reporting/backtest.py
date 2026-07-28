@@ -20,6 +20,7 @@ from app.data.base import MarketDataProvider
 from app.execution.engine import ExecutionEngine
 from app.execution.paper_broker import PaperBroker
 from app.models.domain import Fill, Position
+from app.reporting.benchmark import compute_benchmark_curve
 from app.risk.risk_manager import RiskManager
 from app.risk.rules import RiskLimits
 from app.strategies.base import Strategy
@@ -160,13 +161,7 @@ class Backtester:
     def _compute_benchmark(
         self, symbol: str, start: datetime, end: datetime
     ) -> pd.Series | None:
-        data = self.data_provider.get_history(symbol, start, end)
-        if data.empty:
+        curve = compute_benchmark_curve(self.data_provider, symbol, start, end, self.initial_capital)
+        if curve is None:
             logger.warning("No historical data for benchmark %s; skipping benchmark comparison", symbol)
-            return None
-        first_close = data["close"].iloc[0]
-        if first_close <= 0:
-            return None
-        curve = (data["close"] / first_close) * self.initial_capital
-        curve.index.name = "date"
         return curve

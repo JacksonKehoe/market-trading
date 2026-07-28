@@ -21,13 +21,20 @@ across strategies. This makes their results directly comparable: the
 dashboard and both email reports lead with a strategy comparison table
 and a combined equity-curve chart (one line per strategy).
 
-**News sentiment (branch: `feature/sentiment-analysis`):** an optional
-fourth strategy, `sma_sentiment`, scrapes recent news headlines and
-vetoes SMA-crossover BUY signals when sentiment is bearish. Free and
-local — scraped from Google News' RSS feed and scored with VADER, no
-LLM/API key/cost involved. Opt in by adding `sma_sentiment` to
-`STRATEGIES`; it then shows up in the dashboard/reports comparison like
-any other strategy with no other changes needed.
+**News sentiment:** an optional fourth strategy, `sma_sentiment`, scrapes
+recent news headlines and vetoes SMA-crossover BUY signals when sentiment
+is bearish. Free and local — scraped from Google News' RSS feed and
+scored with VADER, no LLM/API key/cost involved. Opt in by adding
+`sma_sentiment` to `STRATEGIES`; it then shows up in the dashboard/reports
+comparison like any other strategy with no other changes needed. The
+morning email always includes a Market Sentiment table for the watchlist
+regardless of which strategies are enabled.
+
+**S&P 500 benchmark:** every equity-curve chart (dashboard and evening
+email) and the morning email's market summary include `BENCHMARK_SYMBOL`
+(default `SPY`) normalized to the same starting capital as the strategies,
+so performance can be judged against a passive baseline rather than in
+isolation.
 
 ## Quickstart
 
@@ -122,10 +129,10 @@ only points one way.
 | `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
 | `app/database` | SQLAlchemy engine/session bootstrap (`engine.py`); `orm_models.py` (`TradeRecord`, `PositionRecord`, `AccountSnapshotRecord` — positions and snapshots are scoped by `strategy_name`, since each strategy trades its own independent account); `SqlTradeRepository`, which satisfies `execution.TradeRepository` structurally and converts to/from `app/models/domain.py`. | `models`, `config` |
-| `app/reporting` | `Backtester` replays a `Strategy` across a watchlist and date range through the *real* `PaperBroker`/`RiskManager`/`ExecutionEngine` via `ReplayMarketDataProvider` (serves data "as of" a simulated date so nothing can see the future) — a backtest is the live paper-trading pipeline fed historical bars, not a separate simulation. `metrics.py` computes total return, CAGR, Sharpe, max drawdown, win rate, average gain/loss, profit factor, and expectancy from an equity curve + trade list (`compute_trade_pnl` reconstructs per-trade realized P&L by replaying fills through a scratch `Portfolio`). `charts.py` builds Plotly equity-curve and drawdown figures; `report_generator.py` renders them into a self-contained HTML file via Jinja2 and saves it to `reports/`. | `models`, `data`, `strategies`, `portfolio`, `risk`, `execution`, `database` |
-| `app/email` | `report_data.py` builds the morning/evening report context — a per-strategy comparison table plus combined positions/signals/trades/risk tables (each row tagged with a `strategy` column) and, for the evening report, a combined equity-curve series per strategy — from a list of `StrategyState` (name + live `BrokerInterface` + signals), plus shared `MarketDataProvider`/`SqlTradeRepository`. `renderer.py` turns that into HTML via Jinja2, building a multi-line Plotly equity-curve chart (one line per strategy) for the evening report. `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting` |
-| `app/scheduler` | `context.py`'s `build_trading_contexts` builds one `TradingContext` per `Settings.strategies` entry — each its own broker rehydrated from the DB, engine, and strategy, all sharing one data provider (and its cache) and one repository — the paper-trading counterpart to `reporting.Backtester`. `jobs.py` has `morning_job` (reset each strategy's daily-loss baseline, scan + trade, email one comparison report), `evening_job` (mark every strategy to market, email one comparison report), and `hourly_scan_job` (optional, trades only, no report). `scheduler_service.py` wires `Settings.morning_report_time`/`evening_report_time`/`hourly_scan_enabled` into APScheduler `CronTrigger`s. | everything above |
-| `app/dashboard` | A read-only Flask app (`app.py`, one route) showing a live comparison across every configured strategy: a summary table, a combined equity-curve chart, and combined holdings/signals/risk/transactions tables tagged by strategy — all read from `SqlTradeRepository` plus one live price/signal check per strategy per symbol. Runs on `127.0.0.1` only; never writes to the database or places a trade. | `models`, `config`, `data`, `database`, `risk`, `strategies`, `reporting` |
+| `app/reporting` | `Backtester` replays a `Strategy` across a watchlist and date range through the *real* `PaperBroker`/`RiskManager`/`ExecutionEngine` via `ReplayMarketDataProvider` (serves data "as of" a simulated date so nothing can see the future) — a backtest is the live paper-trading pipeline fed historical bars, not a separate simulation. `metrics.py` computes total return, CAGR, Sharpe, max drawdown, win rate, average gain/loss, profit factor, and expectancy from an equity curve + trade list (`compute_trade_pnl` reconstructs per-trade realized P&L by replaying fills through a scratch `Portfolio`). `benchmark.py`'s `compute_benchmark_curve(provider, symbol, start, end, initial_capital)` scales a symbol's close price to start at the same initial capital as the strategies (returns `None`, never raises, if the symbol has no data for the range) — shared by the backtester, dashboard, and email reports so "compare against a benchmark" is implemented once. `charts.py` builds Plotly equity-curve and drawdown figures (the benchmark is just another named series in the same multi-line chart); `report_generator.py` renders them into a self-contained HTML file via Jinja2 and saves it to `reports/`. | `models`, `data`, `strategies`, `portfolio`, `risk`, `execution`, `database` |
+| `app/email` | `report_data.py` builds the morning/evening report context — a per-strategy comparison table plus combined positions/signals/trades/risk tables (each row tagged with a `strategy` column) and, for the evening report, a combined equity-curve series per strategy — from a list of `StrategyState` (name + live `BrokerInterface` + signals), plus shared `MarketDataProvider`/`SqlTradeRepository`. Also appends a `BENCHMARK_SYMBOL` row/series (via `reporting.benchmark.compute_benchmark_curve`, always requesting at least a 7-day window so it works from day one even on a brand-new account) and, for the morning report, a per-symbol sentiment table (via an optional `SentimentService`). `renderer.py` turns that into HTML via Jinja2, building a multi-line Plotly equity-curve chart (one line per strategy, plus the benchmark) for the evening report. `mailer.py` sends it over SMTP if `EMAIL_*` is configured; otherwise it's a no-op (the report is still always saved to disk by the scheduler). Takes its dependencies as plain parameters, not a bundled context object, so it can't accidentally depend on `app.scheduler`. | `models`, `config`, `data`, `execution`, `database`, `risk`, `strategies`, `reporting`, `sentiment` |
+| `app/scheduler` | `context.py`'s `build_trading_contexts` builds one `TradingContext` per `Settings.strategies` entry — each its own broker rehydrated from the DB, engine, and strategy, all sharing one data provider (and its cache) and one repository — the paper-trading counterpart to `reporting.Backtester`. `jobs.py` has `morning_job` (reset each strategy's daily-loss baseline, scan + trade, build a `SentimentService` for the report, email one comparison report), `evening_job` (mark every strategy to market, email one comparison report), and `hourly_scan_job` (optional, trades only, no report). `scheduler_service.py` wires `Settings.morning_report_time`/`evening_report_time`/`hourly_scan_enabled` into APScheduler `CronTrigger`s. | everything above |
+| `app/dashboard` | A read-only Flask app (`app.py`, one route) showing a live comparison across every configured strategy: a summary table, a combined equity-curve chart, and combined holdings/signals/risk/transactions tables tagged by strategy — all read from `SqlTradeRepository` plus one live price/signal check per strategy per symbol. Also adds a `BENCHMARK_SYMBOL` comparison row and chart series (same shared `compute_benchmark_curve`, same 7-day minimum lookback as the email reports), styled distinctly and excluded from the signal-filter dropdown since it isn't a strategy. Runs on `127.0.0.1` only; never writes to the database or places a trade. | `models`, `config`, `data`, `database`, `risk`, `strategies`, `reporting` |
 
 ### Key design decisions
 
@@ -289,6 +296,23 @@ only points one way.
   `SentimentFilteredStrategy` treats unknown the same as neutral/bullish
   (passes the signal through) rather than blocking trades because a
   third-party feed hiccuped.
+- **The benchmark curve is one shared function, not three separate
+  implementations.** `reporting.benchmark.compute_benchmark_curve` is
+  used unchanged by the backtester, the dashboard, and both email
+  reports — "what would this starting capital be worth if it just
+  tracked SPY" is computed identically everywhere instead of drifting
+  across three ad-hoc copies. Like `SentimentService`, it returns `None`
+  on missing data instead of raising, so a benchmark row/series is simply
+  omitted (never crashes a report) if the symbol has no history for the
+  requested range.
+- **Benchmark lookback always requests at least 7 days, even for a
+  brand-new account.** The naive approach — start the benchmark window
+  at the earliest equity snapshot — silently produces nothing on a
+  fresh account, because a window of a few minutes has no daily bar to
+  serve. The dashboard and evening report both clamp the window to
+  `min(earliest_snapshot, now - 7 days)` so the benchmark comparison
+  works from the first run instead of only appearing once several days
+  of history have organically accumulated.
 
 ## Project layout
 
@@ -338,12 +362,14 @@ subset of `sma`/`rsi`/`macd`/`sma_sentiment` — each runs as its own
 independent simulated account), `DATABASE_PATH`,
 `EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`, `MORNING_REPORT_TIME`,
 `EVENING_REPORT_TIME`, `HOURLY_SCAN_ENABLED`, `SENTIMENT_HEADLINE_LIMIT`,
-`SENTIMENT_CACHE_TTL_SECONDS`, risk-limit percentages, etc.). Every value
-has a working default, so the app runs with no `.env` file and no email
-credentials at all — email sending is skipped (and logged) when
-`EMAIL_*` isn't fully configured, and every report is still saved to
-`reports/` regardless. Sentiment scraping/scoring needs no credentials
-either — it's opt-in via `STRATEGIES` only.
+`SENTIMENT_CACHE_TTL_SECONDS`, `BENCHMARK_SYMBOL`, risk-limit percentages,
+etc.). Every value has a working default, so the app runs with no `.env`
+file and no email credentials at all — email sending is skipped (and
+logged) when `EMAIL_*` isn't fully configured, and every report is still
+saved to `reports/` regardless. Sentiment scraping/scoring needs no
+credentials either — it's opt-in via `STRATEGIES` only. `BENCHMARK_SYMBOL`
+(default `SPY`) needs no credentials either — it's fetched through the
+same `yfinance` provider as the watchlist.
 
 ## Development phases
 
@@ -363,5 +389,5 @@ either — it's opt-in via `STRATEGIES` only.
 
 Each phase shipped runnable and tested before the next began. All six are
 complete on `main`. Since then: multi-strategy comparison (each strategy
-trades its own account) and, on `feature/sentiment-analysis`, the
-`sma_sentiment` strategy described above.
+trades its own account), the `sma_sentiment` strategy and Market Sentiment
+email table, and S&P 500 benchmark tracking, all described above.

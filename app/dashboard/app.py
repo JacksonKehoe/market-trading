@@ -23,6 +23,7 @@ from app.data.factory import build_market_data_provider
 from app.data.watchlist import load_watchlist
 from app.database.engine import get_session_factory, init_db
 from app.database.repository import SqlTradeRepository
+from app.reporting.benchmark import compute_benchmark_curve
 from app.reporting.charts import build_multi_equity_curve_chart
 from app.reporting.positions import position_rows
 from app.risk.rules import RiskLimits
@@ -33,6 +34,9 @@ logger = get_logger("app")
 
 _SIGNAL_LOOKBACK_DAYS = 250
 _MAX_RECENT_TRADES = 25
+_MIN_BENCHMARK_LOOKBACK_DAYS = 7
+"""Even on a brand-new account (minutes of history), request at least this
+much benchmark history -- a narrower window may not contain a single daily bar."""
 
 
 def create_app(settings: Settings | None = None) -> Flask:
@@ -106,6 +110,30 @@ def create_app(settings: Settings | None = None) -> Flask:
                     "open_positions": len(rows),
                     "max_open_positions": risk_limits.max_open_positions,
                     "cash_reserve_pct": (cash / equity * 100) if equity else 0.0,
+                }
+            )
+
+        non_empty_curves = [curve for curve in equity_curves.values() if not curve.empty]
+        earliest_snapshot = min(curve.index.min() for curve in non_empty_curves) if non_empty_curves else start
+        # On a fresh account, the earliest snapshot can be minutes old -- too
+        # narrow a window for a *daily* benchmark bar to exist at all. Always
+        # request at least a week so the benchmark works from day one instead of
+        # silently doing nothing until several days of history have accumulated.
+        benchmark_start = min(earliest_snapshot, end - timedelta(days=_MIN_BENCHMARK_LOOKBACK_DAYS))
+        benchmark_curve = compute_benchmark_curve(
+            data_provider, settings.benchmark_symbol, benchmark_start, end, settings.initial_capital
+        )
+        benchmark_label = f"{settings.benchmark_symbol} (Benchmark)"
+        if benchmark_curve is not None and not benchmark_curve.empty:
+            equity_curves[benchmark_label] = benchmark_curve
+            comparison.append(
+                {
+                    "strategy": benchmark_label,
+                    "equity": benchmark_curve.iloc[-1],
+                    "cash": None,
+                    "return_pct": (benchmark_curve.iloc[-1] / settings.initial_capital - 1) * 100,
+                    "open_positions": None,
+                    "is_benchmark": True,
                 }
             )
 

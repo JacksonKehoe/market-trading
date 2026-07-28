@@ -112,3 +112,48 @@ def test_index_survives_a_watchlist_symbol_with_no_data(tmp_path: Path, monkeypa
     response = client.get("/")
 
     assert response.status_code == 200
+
+
+def test_index_shows_benchmark_row_when_benchmark_data_available(tmp_path: Path, monkeypatch) -> None:
+    aapl_history = make_price_frame([100.0 + i for i in range(30)])
+    spy_history = make_price_frame([400.0 + i for i in range(30)])
+    history = {"AAPL": aapl_history, "SPY": spy_history}
+    monkeypatch.setattr(
+        dashboard_app, "build_market_data_provider", lambda settings: FakeHistoricalMarketDataProvider(history)
+    )
+    settings = _settings(tmp_path, strategies=["sma"], benchmark_symbol="SPY")
+    strategy_name = build_strategy("sma").name
+
+    # Use a snapshot timestamp inside make_price_frame's default Jan-2026 date
+    # range (not datetime.now()) so it actually overlaps the fake SPY history.
+    repository = build_test_repository(settings.database_path)
+    repository.save_account_snapshot(
+        Account(timestamp=datetime(2026, 1, 15, tzinfo=UTC), cash=10_000.0, positions_value=0.0), strategy_name
+    )
+
+    app = dashboard_app.create_app(settings)
+    client = app.test_client()
+
+    response = client.get("/")
+    body = response.data.decode("utf-8")
+
+    assert response.status_code == 200
+    assert "SPY (Benchmark)" in body
+    assert "benchmark-row" in body
+
+
+def test_index_omits_benchmark_row_when_benchmark_data_unavailable(tmp_path: Path, monkeypatch) -> None:
+    history = {"AAPL": make_price_frame([100.0 + i for i in range(30)])}  # no SPY data
+    monkeypatch.setattr(
+        dashboard_app, "build_market_data_provider", lambda settings: FakeHistoricalMarketDataProvider(history)
+    )
+    settings = _settings(tmp_path, strategies=["sma"], benchmark_symbol="SPY")
+
+    app = dashboard_app.create_app(settings)
+    client = app.test_client()
+
+    response = client.get("/")
+    body = response.data.decode("utf-8")
+
+    assert response.status_code == 200
+    assert "SPY (Benchmark)" not in body

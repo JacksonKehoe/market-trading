@@ -1,4 +1,5 @@
 from app.reporting.backtest import Backtester, BacktestResult, ReplayMarketDataProvider
+from app.reporting.benchmark import compute_benchmark_curve
 from app.reporting.charts import build_drawdown_chart, build_equity_curve_chart, build_multi_equity_curve_chart
 from app.reporting.metrics import (
     PerformanceMetrics,
@@ -23,6 +24,7 @@ __all__ = [
     "Backtester",
     "BacktestResult",
     "ReplayMarketDataProvider",
+    "compute_benchmark_curve",
     "build_equity_curve_chart",
     "build_multi_equity_curve_chart",
     "build_drawdown_chart",

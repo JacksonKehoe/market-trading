@@ -26,6 +26,7 @@
   .controls select { margin-left: 0.4rem; padding: 0.2rem 0.4rem; }
   .controls label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; }
   .strategy-badge { display: inline-block; background: #eef2ff; color: #3730a3; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+  .benchmark-row { font-style: italic; color: #555; background: #fafafa; }
 </style>
 </head>
 <body>
@@ -39,12 +40,12 @@
     <thead><tr><th>Strategy</th><th>Equity</th><th>Cash</th><th>Return</th><th>Open Positions</th></tr></thead>
     <tbody>
     {% for c in comparison %}
-      <tr>
+      <tr class="{{ 'benchmark-row' if c.is_benchmark else '' }}">
         <td>{{ c.strategy }}</td>
         <td>${{ "%.2f"|format(c.equity) }}</td>
-        <td>${{ "%.2f"|format(c.cash) }}</td>
+        <td>{{ "$%.2f"|format(c.cash) if c.cash is not none else "—" }}</td>
         <td class="{{ 'positive' if c.return_pct >= 0 else 'negative' }}">{{ "%.2f"|format(c.return_pct) }}%</td>
-        <td>{{ c.open_positions }}</td>
+        <td>{{ c.open_positions if c.open_positions is not none else "—" }}</td>
       </tr>
     {% else %}
       <tr><td colspan="5">No strategies configured.</td></tr>
@@ -94,7 +95,7 @@
     <label>Strategy:
       <select id="signal-strategy-filter" onchange="filterSignals()">
         <option value="all">All Strategies</option>
-        {% for c in comparison %}
+        {% for c in comparison if not c.is_benchmark %}
           <option value="{{ c.strategy }}">{{ c.strategy }}</option>
         {% endfor %}
       </select>
