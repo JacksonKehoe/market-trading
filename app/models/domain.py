@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.models.enums import OrderSide, OrderStatus, OrderType, SignalType
+from app.models.enums import OrderSide, OrderStatus, OrderType, SentimentLabel, SignalType
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,3 +105,15 @@ class Account:
     @property
     def equity(self) -> float:
         return self.cash + self.positions_value
+
+
+@dataclass(frozen=True, slots=True)
+class SentimentScore:
+    """A symbol's aggregate news sentiment as of a point in time."""
+
+    symbol: str
+    label: SentimentLabel
+    score: float
+    """Average VADER compound score across headlines, in [-1, 1]."""
+    headline_count: int
+    timestamp: datetime

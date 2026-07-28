@@ -33,3 +33,11 @@ class OrderStatus(str, Enum):
     FILLED = "FILLED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
+
+
+class SentimentLabel(str, Enum):
+    """Coarse sentiment classification for a symbol's recent news headlines."""
+
+    BULLISH = "BULLISH"
+    NEUTRAL = "NEUTRAL"
+    BEARISH = "BEARISH"

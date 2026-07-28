@@ -60,7 +60,7 @@ def create_app(settings: Settings | None = None) -> Flask:
         start = end - timedelta(days=_SIGNAL_LOOKBACK_DAYS)
 
         for name in strategy_names:
-            strategy = build_strategy(name)
+            strategy = build_strategy(name, settings)
 
             cash = repository.latest_cash_balance(strategy.name)
             if cash is None:

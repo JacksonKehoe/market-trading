@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
     initial_capital = args.initial_capital if args.initial_capital is not None else settings.initial_capital
     benchmark_symbol = args.benchmark.strip().upper() if args.benchmark and args.benchmark.strip() else None
 
-    strategy = build_strategy(args.strategy)
+    strategy = build_strategy(args.strategy, settings)
     provider = build_market_data_provider(settings)
     risk_limits = RiskLimits.from_settings(settings)
     backtester = Backtester(

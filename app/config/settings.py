@@ -81,6 +81,10 @@ class Settings:
     not one account split across strategies.
     """
 
+    # News sentiment (free/local -- scraped headlines + VADER, no API key)
+    sentiment_headline_limit: int = 10
+    sentiment_cache_ttl_seconds: float = 1800.0
+
     @property
     def database_url(self) -> str:
         return f"sqlite:///{self.database_path.as_posix()}"
@@ -124,4 +128,6 @@ def get_settings() -> Settings:
         max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "10")),
         commission_per_trade=float(os.getenv("COMMISSION_PER_TRADE", "0.0")),
         strategies=_split_strategies(os.getenv("STRATEGIES", os.getenv("STRATEGY", "sma,rsi,macd"))),
+        sentiment_headline_limit=int(os.getenv("SENTIMENT_HEADLINE_LIMIT", "10")),
+        sentiment_cache_ttl_seconds=float(os.getenv("SENTIMENT_CACHE_TTL_SECONDS", "1800.0")),
     )

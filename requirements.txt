@@ -18,6 +18,10 @@ Jinja2>=3.1
 # Dashboard (local-only web UI)
 Flask>=3.0
 
+# News sentiment (scraped headlines + local rule-based scoring, no API key)
+requests>=2.31
+vaderSentiment>=3.3
+
 # Testing
 pytest>=8.0
 pytest-cov>=5.0

@@ -21,6 +21,14 @@ across strategies. This makes their results directly comparable: the
 dashboard and both email reports lead with a strategy comparison table
 and a combined equity-curve chart (one line per strategy).
 
+**News sentiment (branch: `feature/sentiment-analysis`):** an optional
+fourth strategy, `sma_sentiment`, scrapes recent news headlines and
+vetoes SMA-crossover BUY signals when sentiment is bearish. Free and
+local — scraped from Google News' RSS feed and scored with VADER, no
+LLM/API key/cost involved. Opt in by adding `sma_sentiment` to
+`STRATEGIES`; it then shows up in the dashboard/reports comparison like
+any other strategy with no other changes needed.
+
 ## Quickstart
 
 ```bash
@@ -66,8 +74,10 @@ config, models, utils        (no internal dependencies — the shared vocabulary
         │
         ├── data              (market data: fetch + cache)
         ├── indicators         (pure pandas/numpy functions)
+        ├── sentiment           (scraped headlines → SentimentScore; free, local)
         │
-strategies                    (indicators + models → Signal; no I/O)
+strategies                    (indicators + models → Signal; no I/O;
+                                SentimentFilteredStrategy also uses sentiment)
         │
 portfolio, risk                (in-memory state + rule evaluation)
         │
@@ -106,7 +116,8 @@ only points one way.
 | `app/utils` | Cross-cutting helpers — currently `logging_config.py`, which wires up five rotating log files (`app`, `trades`, `errors`, `scheduler`, `market_data`). | nothing |
 | `app/data` | `MarketDataProvider` interface; `YFinanceProvider` (free, no API key, US equities + ETFs); `CachedMarketDataProvider`, a decorator adding an on-disk Parquet history cache and a short-TTL in-memory latest-price cache around any provider; `load_watchlist` resolves `Settings.watchlist` into a deduplicated symbol list; `build_market_data_provider` wires the concrete (cached, yfinance-backed) stack for real use. Strategies never call a data vendor directly. | `models`, `config` |
 | `app/indicators` | Pure functions operating on `pandas` Series — no classes, no state: `sma`/`ema`, `rsi` (Wilder's smoothing), `macd` (returns a `macd`/`signal`/`histogram` DataFrame). `NaN` during warm-up instead of a misleadingly early value. | nothing |
-| `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD), plus a shared `_hold()` helper for the common "not enough history" case. Three implementations: `MovingAverageCrossoverStrategy`, `RsiStrategy` (oversold/overbought bounce), `MacdStrategy` — all edge-triggered (fire once on the actual cross, not every bar the condition holds). Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators` |
+| `app/sentiment` | `NewsProvider` interface; `GoogleNewsRssProvider` scrapes Google News' public RSS search feed for a symbol (real server-rendered XML, not a JS-rendered page — no headless browser needed). `SentimentAnalyzer` interface; `VaderSentimentAnalyzer` scores headlines with VADER, a free local rule-based lexicon scorer (no LLM, no API key, no cost). `SentimentService` wraps both behind a TTL cache (mirrors `CachedMarketDataProvider`'s pattern) and swallows scraping/scoring failures, returning `None` ("unknown") rather than raising. `build_sentiment_service(settings)` wires the concrete stack. | `models`, `config` |
+| `app/strategies` | `Strategy` interface: takes a symbol + OHLCV `DataFrame`, returns exactly one `Signal` (BUY/SELL/HOLD), plus a shared `_hold()` helper for the common "not enough history" case. Three base implementations: `MovingAverageCrossoverStrategy`, `RsiStrategy` (oversold/overbought bounce), `MacdStrategy` — all edge-triggered (fire once on the actual cross, not every bar the condition holds). `SentimentFilteredStrategy` is a decorator wrapping any base `Strategy` + a `SentimentService`, downgrading BUY to HOLD when news sentiment is bearish; registered in `factory.py` as `sma_sentiment`. Strategies know nothing about the database, the broker, or the portfolio. | `models`, `indicators`, `sentiment` (only for the decorator) |
 | `app/portfolio` | `Portfolio` — the in-memory ledger `PaperBroker` uses to simulate an account: applies fills, tracks cash/positions/realized P/L, computes equity and unrealized P/L against a price map. No DB access — persistence is a separate concern. | `models` |
 | `app/risk` | `RiskLimits` (config) + `RiskManager`, which sizes and approves/rejects BUY/SELL signals against those limits, and generates forced-exit orders via `check_exits` (stop-loss/take-profit). Operates on plain `Account`/`Position` data, not a concrete broker, so it's reusable unchanged for live trading later. | `models`, `risk.rules` |
 | `app/execution` | `BrokerInterface` — the seam future live brokers plug into. `PaperBroker` is the only implementation: an in-memory simulator (via `Portfolio`), no network, no credentials. `ExecutionEngine` chains signal → risk check → broker fill → optional persistence, and separately runs `RiskManager.check_exits` each cycle for stop-loss/take-profit. `TradeRepository` (a `Protocol`) is the persistence port it writes through. | `models`, `risk`, `portfolio`, `data` |
@@ -248,6 +259,36 @@ only points one way.
   by the same stop-loss/take-profit/position-sizing rules — the
   comparison is about strategy logic, not one strategy getting looser
   risk controls than another.
+- **Sentiment is scraped + scored locally (VADER), not judged by an
+  LLM.** An LLM would give more nuanced judgments, but at the cost of a
+  required API key and a per-call price — in tension with "don't require
+  API keys unless optional." VADER is free, runs with no network call
+  for the scoring step itself, and is specifically tuned for short,
+  informal text like headlines. `SentimentAnalyzer` is still an
+  interface, so an LLM-backed implementation could be swapped in later
+  as an opt-in upgrade without changing `SentimentService` or
+  `SentimentFilteredStrategy`.
+- **Sentiment filters BUY signals only; it never generates or blocks a
+  SELL.** `SentimentFilteredStrategy` only consults `SentimentService`
+  when the wrapped strategy proposes a BUY, downgrading it to HOLD on
+  bearish sentiment. SELL and HOLD pass through untouched — risk-driven
+  exits (`RiskManager.check_exits`) are already independent of any
+  signal, and a strategy's own SELL logic shouldn't be second-guessed by
+  a noisier, lower-fidelity signal.
+- **`SentimentFilteredStrategy` is a decorator, not a new strategy
+  class per base strategy.** Any existing `Strategy` can be wrapped
+  (`SentimentFilteredStrategy(RsiStrategy(), sentiment_service)`) without
+  modification. It's registered in `app.strategies.factory` as
+  `sma_sentiment` — because the factory is the one place every other
+  module (scheduler, dashboard, backtester) already goes through to
+  resolve a strategy by name, adding this required no changes to any of
+  them; it just shows up as another comparable strategy.
+- **`SentimentService.get_sentiment` returns `None` on failure, never
+  raises.** A scraping error (network blip, malformed feed, a symbol
+  with no news coverage) is logged and treated as "sentiment unknown" —
+  `SentimentFilteredStrategy` treats unknown the same as neutral/bullish
+  (passes the signal through) rather than blocking trades because a
+  third-party feed hiccuped.
 
 ## Project layout
 
@@ -261,8 +302,11 @@ app/
 │                                          CachedMarketDataProvider, load_watchlist
 ├── indicators/   moving_average.py, rsi.py, macd.py
 │                                        — sma, ema, rsi, macd
-├── strategies/   base.py, moving_average_crossover.py, rsi_strategy.py, macd_strategy.py
-│                                        — Strategy interface + 3 implementations
+├── sentiment/    news_provider.py, analyzer.py, service.py, factory.py
+│                                        — GoogleNewsRssProvider, VaderSentimentAnalyzer,
+│                                          SentimentService, build_sentiment_service
+├── strategies/   base.py, moving_average_crossover.py, rsi_strategy.py, macd_strategy.py,
+│                 sentiment_filtered.py — Strategy interface + 4 implementations
 ├── portfolio/    portfolio.py           — Portfolio ledger (cash/positions/P&L)
 ├── risk/         rules.py, risk_manager.py — RiskLimits + RiskManager
 ├── execution/    broker_base.py, paper_broker.py, engine.py, repository.py
@@ -290,13 +334,16 @@ run_dashboard.py  python run_dashboard.py [--port N]  — starts the local dashb
 
 All configuration lives in `.env` (see `.env.example` for the full list
 with defaults: `INITIAL_CAPITAL`, `WATCHLIST`, `STRATEGIES` (comma-separated
-subset of `sma`/`rsi`/`macd` — each runs as its own independent simulated
-account), `DATABASE_PATH`, `EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`,
-`MORNING_REPORT_TIME`, `EVENING_REPORT_TIME`, `HOURLY_SCAN_ENABLED`,
-risk-limit percentages, etc.). Every value has a working default, so the
-app runs with no `.env` file and no email credentials at all — email
-sending is skipped (and logged) when `EMAIL_*` isn't fully configured,
-and every report is still saved to `reports/` regardless.
+subset of `sma`/`rsi`/`macd`/`sma_sentiment` — each runs as its own
+independent simulated account), `DATABASE_PATH`,
+`EMAIL_USERNAME`/`EMAIL_PASSWORD`/`EMAIL_TO`, `MORNING_REPORT_TIME`,
+`EVENING_REPORT_TIME`, `HOURLY_SCAN_ENABLED`, `SENTIMENT_HEADLINE_LIMIT`,
+`SENTIMENT_CACHE_TTL_SECONDS`, risk-limit percentages, etc.). Every value
+has a working default, so the app runs with no `.env` file and no email
+credentials at all — email sending is skipped (and logged) when
+`EMAIL_*` isn't fully configured, and every report is still saved to
+`reports/` regardless. Sentiment scraping/scoring needs no credentials
+either — it's opt-in via `STRATEGIES` only.
 
 ## Development phases
 
@@ -310,8 +357,11 @@ and every report is still saved to `reports/` regardless.
    Crossover / RSI / MACD strategies.
 5. **Backtesting & reporting** — `run_backtest.py`, performance metrics
    (Sharpe, CAGR, drawdown, ...), equity curve + benchmark charts.
-6. **Scheduler, email reports, dashboard** *(this phase)* — morning/evening
+6. **Scheduler, email reports, dashboard** — morning/evening
    jobs (`run_scheduler.py`), HTML email reports, local dashboard
    (`run_dashboard.py`).
 
-Each phase shipped runnable and tested before the next began. All six are complete.
+Each phase shipped runnable and tested before the next began. All six are
+complete on `main`. Since then: multi-strategy comparison (each strategy
+trades its own account) and, on `feature/sentiment-analysis`, the
+`sma_sentiment` strategy described above.

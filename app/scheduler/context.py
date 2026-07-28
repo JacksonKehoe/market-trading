@@ -63,7 +63,7 @@ def build_trading_context(
 
     data_provider = data_provider or build_market_data_provider(settings)
     repository = repository or SqlTradeRepository(get_session_factory(settings))
-    strategy = build_strategy(strategy_name or (settings.strategies[0] if settings.strategies else "sma"))
+    strategy = build_strategy(strategy_name or (settings.strategies[0] if settings.strategies else "sma"), settings)
 
     initial_cash = repository.latest_cash_balance(strategy.name)
     if initial_cash is None:
