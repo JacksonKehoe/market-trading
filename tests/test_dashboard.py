@@ -9,6 +9,14 @@ from app.strategies.factory import build_strategy
 from tests.conftest import FakeHistoricalMarketDataProvider, build_test_repository, make_price_frame
 
 
+class _NoopSentimentService:
+    """No network, no scraping -- building "sma_sentiment" goes through the real
+    `build_sentiment_service`, so tests exercising it must fake it out."""
+
+    def get_sentiment(self, symbol: str):
+        return None
+
+
 def _settings(tmp_path: Path, **overrides: object) -> Settings:
     defaults: dict[str, object] = dict(
         database_path=tmp_path / "test.db",
@@ -70,7 +78,7 @@ def test_index_shows_positions_trades_and_signals_tagged_by_strategy(tmp_path: P
 
     assert response.status_code == 200
     assert "AAPL" in body
-    assert strategy_name in body  # comparison table + tagged position/transaction rows
+    assert "SMA" in body  # display label for "sma" -- comparison table + tagged position/transaction rows
     assert "150.00" in body  # avg entry price rendered somewhere
     assert "Strategy Signals" in body
     assert "Strategy Comparison" in body
@@ -96,8 +104,8 @@ def test_index_compares_two_independent_strategies(tmp_path: Path, monkeypatch) 
     body = response.data.decode("utf-8")
 
     assert response.status_code == 200
-    assert sma_name in body
-    assert rsi_name in body
+    assert "SMA" in body  # display labels for the "sma"/"rsi" factory names
+    assert "RSI" in body
     assert "9000.00" in body or "9,000.00" in body
     assert "11000.00" in body or "11,000.00" in body
 
@@ -140,6 +148,49 @@ def test_index_shows_benchmark_row_when_benchmark_data_available(tmp_path: Path,
     assert response.status_code == 200
     assert "SPY (Benchmark)" in body
     assert "benchmark-row" in body
+
+
+def test_index_uses_nice_strategy_display_labels(tmp_path: Path, monkeypatch) -> None:
+    history = {"AAPL": make_price_frame([100.0 + i for i in range(30)])}
+    monkeypatch.setattr(
+        dashboard_app, "build_market_data_provider", lambda settings: FakeHistoricalMarketDataProvider(history)
+    )
+    monkeypatch.setattr("app.strategies.factory.build_sentiment_service", lambda settings: _NoopSentimentService())
+    settings = _settings(tmp_path, strategies=["sma", "rsi", "macd", "sma_sentiment"])
+
+    app = dashboard_app.create_app(settings)
+    client = app.test_client()
+
+    response = client.get("/")
+    body = response.data.decode("utf-8")
+
+    assert response.status_code == 200
+    assert "SMA" in body
+    assert "RSI" in body
+    assert "MACD" in body
+    assert "SENTIMENT" in body
+    # The underlying technical names (windows/thresholds) are internal DB keys,
+    # not meant to be shown on the dashboard anymore.
+    assert build_strategy("sma").name not in body
+    assert build_strategy("sma_sentiment").name not in body
+
+
+def test_signals_table_hides_holds_by_default_via_client_side_toggle(tmp_path: Path, monkeypatch) -> None:
+    history = {"AAPL": make_price_frame([100.0] * 30)}  # flat prices -> HOLD signal, no crossover
+    monkeypatch.setattr(
+        dashboard_app, "build_market_data_provider", lambda settings: FakeHistoricalMarketDataProvider(history)
+    )
+    app = dashboard_app.create_app(_settings(tmp_path, strategies=["sma"]))
+    client = app.test_client()
+
+    response = client.get("/")
+    body = response.data.decode("utf-8")
+
+    assert response.status_code == 200
+    # Checkbox is unchecked (no "checked" attribute) -- holds hidden until the user opts in.
+    assert '<input type="checkbox" id="toggle-all-signals" onchange="applySignalFilters()">' in body
+    assert 'data-signal="HOLD"' in body  # rendered so client-side JS can filter on it
+    assert 'id="no-signals-match"' in body
 
 
 def test_index_omits_benchmark_row_when_benchmark_data_unavailable(tmp_path: Path, monkeypatch) -> None:

@@ -93,7 +93,7 @@
   <h2>Strategy Signals</h2>
   <div class="controls">
     <label>Strategy:
-      <select id="signal-strategy-filter" onchange="filterSignals()">
+      <select id="signal-strategy-filter" onchange="applySignalFilters()">
         <option value="all">All Strategies</option>
         {% for c in comparison if not c.is_benchmark %}
           <option value="{{ c.strategy }}">{{ c.strategy }}</option>
@@ -101,13 +101,14 @@
       </select>
     </label>
     <label><input type="checkbox" id="toggle-reason" checked onchange="toggleReason()"> Show reason</label>
+    <label><input type="checkbox" id="toggle-all-signals" onchange="applySignalFilters()"> Show all signals (including holds)</label>
   </div>
   <table id="signals-table">
     <thead><tr><th>Strategy</th><th>Symbol</th><th>Signal</th><th>Price</th><th class="reason-col">Reason</th></tr></thead>
     <tbody>
     {% for s in signals %}
-      <tr data-strategy="{{ s.strategy_name }}">
-        <td><span class="strategy-badge">{{ s.strategy_name }}</span></td>
+      <tr data-strategy="{{ s.strategy }}" data-signal="{{ s.signal_type.value }}">
+        <td><span class="strategy-badge">{{ s.strategy }}</span></td>
         <td>{{ s.symbol }}</td>
         <td class="{{ 'buy' if s.signal_type.value == 'BUY' else ('sell' if s.signal_type.value == 'SELL' else 'hold') }}">{{ s.signal_type.value }}</td>
         <td>${{ "%.2f"|format(s.price) }}</td>
@@ -116,6 +117,7 @@
     {% else %}
       <tr><td colspan="5">No signal data available.</td></tr>
     {% endfor %}
+    <tr id="no-signals-match" style="display:none;"><td colspan="5"><em>No BUY/SELL signals right now -- check "Show all signals" to see holds.</em></td></tr>
     </tbody>
   </table>
 
@@ -158,11 +160,19 @@
   <footer>market-trading paper trading dashboard — read-only, localhost only.</footer>
 
   <script>
-    function filterSignals() {
-      var value = document.getElementById('signal-strategy-filter').value;
+    function applySignalFilters() {
+      var strategyValue = document.getElementById('signal-strategy-filter').value;
+      var showAll = document.getElementById('toggle-all-signals').checked;
+      var anyVisible = false;
       document.querySelectorAll('#signals-table tbody tr[data-strategy]').forEach(function (row) {
-        row.style.display = (value === 'all' || row.dataset.strategy === value) ? '' : 'none';
+        var strategyMatch = (strategyValue === 'all' || row.dataset.strategy === strategyValue);
+        var signalMatch = (showAll || row.dataset.signal !== 'HOLD');
+        var visible = strategyMatch && signalMatch;
+        row.style.display = visible ? '' : 'none';
+        if (visible) anyVisible = true;
       });
+      var emptyRow = document.getElementById('no-signals-match');
+      if (emptyRow) emptyRow.style.display = anyVisible ? 'none' : '';
     }
 
     function toggleReason() {
@@ -181,6 +191,8 @@
       });
       Plotly.restyle(chart, { visible: visibility });
     }
+
+    applySignalFilters();  // default view hides holds -- apply that before first paint's worth of interaction
   </script>
 </body>
 </html>

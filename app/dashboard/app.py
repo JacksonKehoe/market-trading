@@ -38,6 +38,17 @@ _MIN_BENCHMARK_LOOKBACK_DAYS = 7
 """Even on a brand-new account (minutes of history), request at least this
 much benchmark history -- a narrower window may not contain a single daily bar."""
 
+_STRATEGY_DISPLAY_LABELS = {
+    "sma": "SMA",
+    "rsi": "RSI",
+    "macd": "MACD",
+    "sma_sentiment": "SENTIMENT",
+}
+"""Cosmetic labels for the dashboard only, keyed by the `STRATEGIES` factory
+name (e.g. "sma_sentiment"), not the technical `Strategy.name` it builds
+(e.g. "sma_crossover_20_50_sentiment") -- the latter stays the real
+identifier everywhere else (database keys, email reports)."""
+
 
 def create_app(settings: Settings | None = None) -> Flask:
     settings = settings or get_settings()
@@ -65,6 +76,7 @@ def create_app(settings: Settings | None = None) -> Flask:
 
         for name in strategy_names:
             strategy = build_strategy(name, settings)
+            label = _STRATEGY_DISPLAY_LABELS.get(name, strategy.name)
 
             cash = repository.latest_cash_balance(strategy.name)
             if cash is None:
@@ -74,29 +86,38 @@ def create_app(settings: Settings | None = None) -> Flask:
             broker_view = _StaticPositionsView(open_positions)
             rows = position_rows(broker_view, data_provider)
             for row in rows:
-                row["strategy"] = strategy.name
+                row["strategy"] = label
                 all_positions.append(row)
             positions_value = sum(row["market_value"] for row in rows)
             equity = cash + positions_value
 
-            equity_curves[strategy.name] = repository.equity_curve(strategy.name)
+            equity_curves[label] = repository.equity_curve(strategy.name)
 
             for fill in repository.list_trades(strategy_name=strategy.name):
-                all_trades.append({"strategy": strategy.name, "fill": fill})
+                all_trades.append({"strategy": label, "fill": fill})
 
             for symbol in watchlist:
                 try:
                     data = data_provider.get_history(symbol, start, end)
                     if data.empty:
                         continue
-                    all_signals.append(strategy.generate_signal(symbol, data))
+                    signal = strategy.generate_signal(symbol, data)
+                    all_signals.append(
+                        {
+                            "strategy": label,
+                            "symbol": signal.symbol,
+                            "signal_type": signal.signal_type,
+                            "price": signal.price,
+                            "reason": signal.reason,
+                        }
+                    )
                 except Exception:
                     logger.exception("Failed to compute a %s signal for %s on the dashboard", strategy.name, symbol)
 
             return_pct = (equity / settings.initial_capital - 1) * 100 if settings.initial_capital else 0.0
             comparison.append(
                 {
-                    "strategy": strategy.name,
+                    "strategy": label,
                     "equity": equity,
                     "cash": cash,
                     "return_pct": return_pct,
@@ -105,7 +126,7 @@ def create_app(settings: Settings | None = None) -> Flask:
             )
             risk_rows.append(
                 {
-                    "strategy": strategy.name,
+                    "strategy": label,
                     "allocation_pct": (positions_value / equity * 100) if equity else 0.0,
                     "open_positions": len(rows),
                     "max_open_positions": risk_limits.max_open_positions,
