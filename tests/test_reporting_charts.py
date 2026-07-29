@@ -59,3 +59,13 @@ def test_multi_equity_curve_chart_skips_empty_series() -> None:
 def test_multi_equity_curve_chart_raises_when_all_series_empty() -> None:
     with pytest.raises(ValueError):
         build_multi_equity_curve_chart({"sma": pd.Series(dtype=float), "rsi": pd.Series(dtype=float)})
+
+
+def test_multi_equity_curve_chart_has_a_range_selector_and_slider() -> None:
+    # A benchmark padded to a longer lookback than a young strategy has actually
+    # traded needs a way to narrow the view to a fair, apples-to-apples window.
+    fig = build_multi_equity_curve_chart({"sma": _curve([100.0, 105.0, 110.0])})
+
+    assert fig.layout.xaxis.rangeslider.visible is True
+    button_labels = {button.label for button in fig.layout.xaxis.rangeselector.buttons}
+    assert {"1D", "1W", "1M", "3M", "All"} == button_labels

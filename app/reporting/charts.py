@@ -43,6 +43,20 @@ def build_equity_curve_chart(
     return fig
 
 
+_RANGE_SELECTOR_BUTTONS = [
+    {"count": 1, "label": "1D", "step": "day", "stepmode": "backward"},
+    {"count": 7, "label": "1W", "step": "day", "stepmode": "backward"},
+    {"count": 1, "label": "1M", "step": "month", "stepmode": "backward"},
+    {"count": 3, "label": "3M", "step": "month", "stepmode": "backward"},
+    {"step": "all", "label": "All"},
+]
+"""Shared by every multi-series equity chart: a benchmark normalized over a
+longer lookback than young strategies have actually been trading (see
+`compute_benchmark_curve`'s minimum-lookback padding) will show a return
+that isn't a fair comparison unless the viewer can narrow the window to
+when the strategies actually started."""
+
+
 def build_multi_equity_curve_chart(
     curves: dict[str, pd.Series],
     title: str = "Strategy Comparison — Equity Curves",
@@ -67,6 +81,11 @@ def build_multi_equity_curve_chart(
         yaxis_title="Equity ($)",
         template="plotly_white",
         hovermode="x unified",
+    )
+    fig.update_xaxes(
+        type="date",
+        rangeselector={"buttons": _RANGE_SELECTOR_BUTTONS},
+        rangeslider={"visible": True},
     )
     return fig
 
